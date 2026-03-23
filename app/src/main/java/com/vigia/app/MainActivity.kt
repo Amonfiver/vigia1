@@ -9,19 +9,19 @@
  * - ComponentActivity como base para Compose
  * - ViewModel para gestión de estado
  * - Solicitud de permisos en tiempo de ejecución para cámara
- * - Preview de cámara real usando CameraX
+ * - Preview de cámara real usando CameraX con análisis de frames
  * - Modo de selección de ROI con superposición táctil
- * - Visualización de estado de detección en tiempo real
+ * - Visualización de estado de detección en tiempo real basado en frames reales
  *
  * Limitaciones temporales del MVP:
- * - FrameData de análisis es simulado (no se capturan frames reales de cámara)
  * - Sin implementación real de envío a Telegram
- * - Lógica de detección provisional que se reemplazará en futuras iteraciones
+ * - Lógica de detección provisional basada en luminancia simple
+ * - Sin compensación avanzada de iluminación
  *
  * Cambios recientes:
- * - Añadida visualización del estado de detección provisional
- * - Integración de resultados de análisis en la UI
- * - Indicador de cambio detectado con colores semánticos
+ * - Conexión de frames reales de CameraX al sistema de detección
+ * - CameraPreview ahora retorna StateFlow<FrameData?> para análisis
+ * - Eliminada simulación de datos en el detector
  */
 package com.vigia.app
 
@@ -46,11 +46,13 @@ import com.vigia.app.camera.CameraPreview
 import com.vigia.app.data.local.DataStoreRoiRepository
 import com.vigia.app.data.local.DataStoreTelegramConfigRepository
 import com.vigia.app.detection.DetectionResult
+import com.vigia.app.detection.FrameData
 import com.vigia.app.ui.MainViewModel
 import com.vigia.app.ui.ScreenMode
 import com.vigia.app.ui.components.RoiOverlay
 import com.vigia.app.ui.components.RoiSelector
 import com.vigia.app.utils.PermissionsHelper
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Activity principal de VIGIA.
@@ -58,6 +60,7 @@ import com.vigia.app.utils.PermissionsHelper
 class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: MainViewModel
+    private var frameDataFlow: StateFlow<FrameData?>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,7 +80,12 @@ class MainActivity : ComponentActivity() {
                 ) {
                     VigiaApp(
                         viewModel = viewModel,
-                        onRequestPermission = { requestCameraPermission() }
+                        onRequestPermission = { requestCameraPermission() },
+                        onCameraPreviewCreated = { frameFlow ->
+                            // Conectar el flujo de frames de la cámara al monitoring
+                            frameDataFlow = frameFlow
+                            viewModel.connectCameraFrames(frameFlow)
+                        }
                     )
                 }
             }
@@ -108,11 +116,13 @@ class MainActivity : ComponentActivity() {
  *
  * @param viewModel ViewModel para gestión de estado
  * @param onRequestPermission Callback para solicitar permiso de cámara
+ * @param onCameraPreviewCreated Callback cuando el preview de cámara está listo con su flujo de frames
  */
 @Composable
 fun VigiaApp(
     viewModel: MainViewModel,
-    onRequestPermission: () -> Unit
+    onRequestPermission: () -> Unit,
+    onCameraPreviewCreated: (StateFlow<FrameData?>) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -141,6 +151,7 @@ fun VigiaApp(
             onRequestPermission = onRequestPermission,
             onRoiSelected = { roi -> viewModel.confirmRoiSelection(roi) },
             onRoiSelectionCancelled = { viewModel.cancelRoiSelection() },
+            onCameraPreviewCreated = onCameraPreviewCreated,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -200,6 +211,7 @@ fun CameraArea(
     onRequestPermission: () -> Unit,
     onRoiSelected: (com.vigia.app.domain.model.Roi) -> Unit,
     onRoiSelectionCancelled: () -> Unit,
+    onCameraPreviewCreated: (StateFlow<FrameData?>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (!hasPermission) {
@@ -231,11 +243,16 @@ fun CameraArea(
 
     // Contenedor de la cámara con posible overlay
     Box(modifier = modifier) {
-        // Preview de cámara real (siempre visible cuando hay permiso)
-        CameraPreview(
+        // Preview de cámara real con análisis de frames
+        val frameFlow = CameraPreview(
             modifier = Modifier.fillMaxSize(),
             onError = { /* Manejar error en fase posterior */ }
         )
+
+        // Notificar al padre sobre el flujo de frames
+        LaunchedEffect(frameFlow) {
+            onCameraPreviewCreated(frameFlow)
+        }
 
         when (screenMode) {
             ScreenMode.ROI_SELECTION -> {

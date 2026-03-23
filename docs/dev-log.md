@@ -205,3 +205,43 @@ Crear una base modular de detección visual para el ROI.
 
 ### Siguiente paso recomendado
 Sustituir la simulación por frames reales de CameraX.
+
+---
+
+## Entrada 007 - Frames reales de CameraX en detección
+
+### Fecha
+2026-03-23
+
+### Objetivo
+Sustituir la simulación de datos por frames reales de cámara en el análisis del ROI.
+
+### Qué se hizo
+- creación de FrameProcessor como ImageAnalysis.Analyzer
+- conversión YUV a luminancia (grayscale) en tiempo real
+- downscaling a 320x240 para rendimiento
+- CameraPreview ahora expone StateFlow<FrameData?>
+- MonitoringManager recibe frames reales vía connectCameraFrames()
+- eliminada generación de datos aleatorios
+- análisis usa luminancia real del ROI definido
+- actualizada documentación viva (project-status, code-map, dev-log)
+
+### Archivos/áreas relevantes
+- camera/FrameProcessor.kt (nuevo)
+- camera/CameraPreview.kt (modificado - añadido ImageAnalysis)
+- monitoring/MonitoringManager.kt (modificado - frames reales)
+- MainActivity.kt (modificado - conexión flujo de frames)
+- MainViewModel.kt (modificado - método connectCameraFrames)
+- docs/project-status.md (actualizado)
+- docs/code-map.md (actualizado)
+- docs/dev-log.md (esta entrada)
+
+### Limitaciones temporales
+- algoritmo de detección sigue siendo simple (diferencia de luminancia básica)
+- sin compensación de iluminación ni normalización avanzada
+- resolución de análisis fija a 320x240
+- procesa 1 de cada 5 frames (~6fps) para no sobrecargar
+- sin detección de movimiento ni análisis de textura
+
+### Próximo paso recomendado
+Implementar configuración y prueba de Telegram, seguido de captura y envío de alertas cuando se detecte cambio real.

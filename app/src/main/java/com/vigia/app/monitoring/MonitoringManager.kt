@@ -9,15 +9,17 @@
  * - StateFlow para resultado de detección (para observación desde UI)
  * - Integración con RoiDetector mediante inyección de dependencias
  * - Job de coroutine para análisis periódico que se inicia/para con la vigilancia
+ * - Recepción de frames reales de CameraX vía StateFlow<FrameData?>
  *
  * Limitaciones temporales del MVP:
- * - FrameData simulado (no se capturan frames reales de la cámara todavía)
- * - Análisis periódico simple sin sincronización exacta con frames de cámara
+ * - Análisis periódico simple, no sincronizado exactamente con cada frame de cámara
+ * - Si no hay frames de cámara disponibles, el análisis no produce resultados
+ * - Sin buffer de frames ni cola de procesamiento
  *
  * Cambios recientes:
- * - Añadida integración con RoiDetector
- * - Añadido estado de resultado de detección
- * - Implementado análisis periódico durante vigilancia activa
+ * - Eliminada generación de datos simulados
+ * - Añadida recepción de frames reales de CameraX
+ * - Análisis ahora usa luminancia real del ROI
  */
 package com.vigia.app.monitoring
 
@@ -30,14 +32,14 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.random.Random
+import kotlinx.coroutines.flow.first
 
 /**
  * Gestor del estado de monitorización y análisis de ROI.
  * Controla si la vigilancia está activa y coordina el análisis del detector.
  *
  * @param detector Detector de cambios a utilizar (default: SimpleFrameDifferenceDetector)
- * @param scope CoroutineScope para lanzar el análisis periódico (default: GlobalScope)
+ * @param scope CoroutineScope para lanzar el análisis periódico
  */
 class MonitoringManager(
     private val detector: RoiDetector = SimpleFrameDifferenceDetector(threshold = 30),
@@ -58,6 +60,17 @@ class MonitoringManager(
 
     private var analysisJob: Job? = null
     private var currentRoi: Roi? = null
+    private var frameDataFlow: StateFlow<FrameData?>? = null
+
+    /**
+     * Conecta el flujo de frames de la cámara al manager.
+     * Debe llamarse antes o durante startMonitoring().
+     *
+     * @param frameDataFlow StateFlow que emite frames procesados de CameraX
+     */
+    fun connectCameraFrames(frameDataFlow: StateFlow<FrameData?>) {
+        this.frameDataFlow = frameDataFlow
+    }
 
     /**
      * Inicia la monitorización con un ROI específico.
@@ -75,7 +88,7 @@ class MonitoringManager(
         analysisJob = scope.launch {
             while (isActive) {
                 performAnalysis()
-                delay(1000) // Analizar cada segundo (en MVP, luego será configurable)
+                delay(500) // Analizar cada 500ms (2 veces por segundo)
             }
         }
     }
@@ -103,50 +116,38 @@ class MonitoringManager(
     }
 
     /**
-     * Realiza un ciclo de análisis.
-     * PROVISIONAL: Genera FrameData simulado para demostrar el flujo.
-     * En implementación real se obtendría el frame actual de la cámara.
+     * Realiza un ciclo de análisis usando frames reales de la cámara.
+     * Espera el último frame disponible y lo analiza con el detector.
      */
-    private fun performAnalysis() {
+    private suspend fun performAnalysis() {
         val roi = currentRoi
+        val frameFlow = frameDataFlow
 
-        // PROVISIONAL: Generar FrameData simulado
-        // En implementación real: capturar frame de CameraX y convertir a FrameData
-        val frameData = generateSimulatedFrameData()
+        // Si no hay flujo de cámara conectado, no se puede analizar
+        if (frameFlow == null) {
+            _detectionResult.value = DetectionResult(
+                hasChange = false,
+                confidence = 0f,
+                message = "Esperando frames de cámara..."
+            )
+            return
+        }
 
-        // Realizar análisis
+        // Obtener el último frame disponible (sin bloquear indefinidamente)
+        val frameData = frameFlow.value
+        
+        if (frameData == null) {
+            _detectionResult.value = DetectionResult(
+                hasChange = false,
+                confidence = 0f,
+                message = "Sin datos de frame disponibles"
+            )
+            return
+        }
+
+        // Realizar análisis con el frame real
         val result = detector.analyze(frameData, roi)
         _detectionResult.value = result
-    }
-
-    /**
-     * Genera datos de frame simulados para el MVP.
-     * NOTA: Este método es PROVISIONAL y se eliminará cuando se implemente
-     * captura real de frames desde CameraX.
-     */
-    private fun generateSimulatedFrameData(): FrameData {
-        // Generar array de luminancia aleatorio para simular frame
-        val width = 640
-        val height = 480
-        val size = width * height
-
-        // Simulación: 90% de probabilidad de frame similar, 10% de cambio
-        val baseValue = if (Random.nextFloat() > 0.9f) {
-            Random.nextInt(50, 200) // Cambio significativo
-        } else {
-            128 // Valor base similar
-        }
-
-        val luminanceArray = IntArray(size) {
-            (baseValue + Random.nextInt(-20, 20)).coerceIn(0, 255)
-        }
-
-        return FrameData(
-            timestamp = System.currentTimeMillis(),
-            width = width,
-            height = height,
-            luminanceArray = luminanceArray
-        )
     }
 
     /**

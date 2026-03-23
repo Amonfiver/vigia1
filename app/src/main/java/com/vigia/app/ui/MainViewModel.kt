@@ -11,21 +11,22 @@
  * - Uso de MonitoringManager para gestión del estado de vigilancia y análisis
  * - Persistencia de ROI mediante RoiRepository (DataStore)
  * - Observación de resultados de detección para mostrar en UI
+ * - Conexión del flujo de frames de cámara al MonitoringManager
  *
  * Limitaciones temporales del MVP:
- * - Lógica de detección simulada (FrameData generado, no capturado de cámara real)
+ * - Lógica de detección usa luminancia simple ( FrameData real pero análisis básico)
  * - Sin manejo avanzado de errores de red
  *
  * Cambios recientes:
- * - Añadida observación de resultados de detección del MonitoringManager
- * - Pasar ROI actual al iniciar vigilancia
- * - Estado de detección reflejado en UI
+ * - Añadido método connectCameraFrames para vincular frames reales de CameraX
+ * - Análisis ahora usa datos reales de luminancia en lugar de simulación
  */
 package com.vigia.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vigia.app.detection.DetectionResult
+import com.vigia.app.detection.FrameData
 import com.vigia.app.domain.model.Roi
 import com.vigia.app.domain.model.TelegramConfig
 import com.vigia.app.domain.repository.RoiRepository
@@ -109,6 +110,16 @@ class MainViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * Conecta el flujo de frames de la cámara al sistema de monitorización.
+     * Debe llamarse cuando el CameraPreview esté inicializado.
+     *
+     * @param frameDataFlow StateFlow que emite frames procesados de CameraX
+     */
+    fun connectCameraFrames(frameDataFlow: StateFlow<FrameData?>) {
+        monitoringManager.connectCameraFrames(frameDataFlow)
     }
 
     /**

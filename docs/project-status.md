@@ -9,7 +9,7 @@ El MVP actual busca:
 - permitir activar y detener vigilancia,
 - permitir definir manualmente un ROI,
 - guardar ese ROI localmente,
-- analizar visualmente ese ROI,
+- analizar visualmente ese ROI con frames reales de cámara,
 - y más adelante enviar alertas por Telegram con captura y segunda confirmación a los 3 minutos.
 
 ## Estado actual
@@ -23,20 +23,22 @@ El MVP actual busca:
 - selección manual de ROI sobre la preview
 - confirmación/cancelación de selección
 - reposicionamiento del ROI mediante pulsación y arrastre
-- persistencia local del ROI
+- persistencia local del ROI (DataStore)
 - recuperación automática del ROI al abrir la app
 - visualización del ROI sobre la cámara
-- capa provisional de detección separada por módulos
-- estado visual en UI del resultado provisional de detección
+- capa de detección separada por módulos
+- **frames reales de CameraX conectados al detector**
+- análisis de luminancia real del ROI
+- estado visual en UI del resultado de detección
 
 ### Implementado de forma provisional
-- detector básico desacoplado
-- flujo de análisis conectado a monitorización
-- estado visual de cambio/no cambio
+- detector básico desacoplado (interfaz RoiDetector)
+- algoritmo de detección simple basado en diferencia de luminancia
+- conversión YUV a luminancia sin optimizaciones avanzadas
+- análisis a 320x240 para rendimiento (downscaling)
+- sin compensación de iluminación ni normalización avanzada
 
 ### Aún NO implementado o pendiente
-- uso de frames reales de CameraX dentro del detector
-- análisis real de píxeles del ROI
 - sensibilidad afinada / reducción de falsos positivos
 - configuración real y prueba de Telegram
 - captura real para alertas
@@ -48,11 +50,13 @@ El MVP actual busca:
 
 ## Fase actual del MVP
 
-Fase actual: transición entre ROI persistido y análisis real del ROI con frames de cámara.
+Fase actual: análisis visual real del ROI con frames de cámara funcionando.
+
+La detección ya no usa datos simulados. Ahora procesa luminancia real del ROI usando CameraX ImageAnalysis.
 
 ## Siguiente objetivo recomendado
 
-Conectar frames reales de CameraX al detector para sustituir la simulación actual y analizar de verdad el ROI guardado.
+Implementar la configuración y prueba de Telegram, seguido de la captura y envío de alertas cuando se detecte un cambio.
 
 ## Decisiones clave vigentes
 
@@ -60,15 +64,16 @@ Conectar frames reales de CameraX al detector para sustituir la simulación actu
 - El ROI lo define manualmente el usuario/desarrollador.
 - El ROI puede dibujarse y reposicionarse antes de confirmar.
 - El ROI se guarda localmente y se recupera en futuras sesiones.
+- El análisis usa frames reales de CameraX (ImageAnalysis).
 - La arquitectura debe mantenerse modular y simple.
 - Cada iteración debe ser pequeña, compilable y documentada.
 
 ## Riesgos y puntos de atención
 
-- falsos positivos por iluminación o movimiento de cámara
+- falsos positivos por iluminación o movimiento de cámara (mitigado parcialmente con ROI manual)
 - sobrecargar demasiado pronto la arquitectura
-- mezclar detección, UI y cámara en una sola capa
-- dar por funcional una detección todavía simulada o provisional
+- mezclar detección, UI y cámara en una sola capa (controlado por separación actual)
+- consumo de batería por análisis continuo de frames
 
 ## Recordatorio de disciplina SDD
 
