@@ -19,7 +19,7 @@
  * - Lógica de detección usa luminancia simple (FrameData real pero análisis básico)
  * - Sin manejo avanzado de errores de red
  * - Alerta automática implementada con cooldown de 60 segundos
- * - Segunda captura a los 3 minutos NO implementada todavía
+ * - Confirmación diferida a 3 minutos implementada (se pierde si app se cierra)
  *
  * Cambios recientes:
  * - Añadida gestión completa de configuración de Telegram (guardar, cargar, probar)
@@ -28,6 +28,8 @@
  * - Estados de UI para captura de imagen: loading, success, error
  * - INTEGRACIÓN: AlertManager conectado para alertas automáticas al detectar cambios
  * - Estado de alerta automática añadido a la UI
+ * - INTEGRACIÓN: Estado de confirmación diferida (3 minutos) en UI
+ * - Cancelación de confirmación al detener vigilancia
  */
 package com.vigia.app.ui
 
@@ -35,6 +37,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vigia.app.alert.AlertManager
 import com.vigia.app.alert.AlertState
+import com.vigia.app.alert.ConfirmationState
 import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
@@ -93,6 +96,7 @@ sealed class ImageCaptureState {
  * @property telegramTestState Estado de la prueba de Telegram
  * @property imageCaptureState Estado de la captura y envío de imagen
  * @property alertState Estado de la última alerta automática
+ * @property confirmationState Estado de la confirmación diferida (3 minutos)
  */
 data class MainUiState(
     val screenMode: ScreenMode = ScreenMode.NORMAL,
@@ -104,7 +108,8 @@ data class MainUiState(
     val detectionResult: DetectionResult? = null,
     val telegramTestState: TelegramTestState = TelegramTestState.Idle,
     val imageCaptureState: ImageCaptureState = ImageCaptureState.Idle,
-    val alertState: AlertState = AlertState.Idle
+    val alertState: AlertState = AlertState.Idle,
+    val confirmationState: ConfirmationState = ConfirmationState.Idle
 )
 
 /**
@@ -172,6 +177,15 @@ class MainViewModel(
             alertManager.alertState.collect { alertState ->
                 _uiState.update { currentState ->
                     currentState.copy(alertState = alertState)
+                }
+            }
+        }
+
+        // Observar estado de confirmación diferida
+        viewModelScope.launch {
+            alertManager.confirmationState.collect { confirmationState ->
+                _uiState.update { currentState ->
+                    currentState.copy(confirmationState = confirmationState)
                 }
             }
         }
@@ -264,6 +278,8 @@ class MainViewModel(
      */
     fun stopMonitoring() {
         monitoringManager.stopMonitoring()
+        // Cancelar confirmación programada si existe
+        alertManager.cancelConfirmation()
     }
 
     /**
@@ -403,6 +419,13 @@ class MainViewModel(
      */
     fun clearAlertState() {
         alertManager.clearState()
+    }
+
+    /**
+     * Limpia el estado de la confirmación.
+     */
+    fun clearConfirmationState() {
+        alertManager.clearConfirmationState()
     }
 
     override fun onCleared() {

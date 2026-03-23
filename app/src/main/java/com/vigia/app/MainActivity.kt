@@ -21,13 +21,14 @@
  * - FrameData de análisis es procesado a 320x240 para rendimiento
  * - Lógica de detección provisional basada en luminancia simple
  * - Cooldown de alertas fijo a 60 segundos
- * - Segunda captura a los 3 minutos NO implementada todavía
+ * - Confirmación se pierde si la app se cierra antes de los 3 minutos
  *
  * Cambios recientes:
  * - Añadida captura y envío manual de imagen a Telegram
  * - UI de captura con feedback visual del proceso
  * - Separación clara entre captura de imagen y envío
  * - INTEGRACIÓN: Sección de alertas automáticas con estado visual
+ * - INTEGRACIÓN: Sección de confirmación diferida (3 minutos) con countdown en UI
  */
 package com.vigia.app
 
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vigia.app.alert.AlertState
+import com.vigia.app.alert.ConfirmationState
 import com.vigia.app.camera.CameraPreview
 import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.data.local.DataStoreRoiRepository
@@ -185,6 +187,13 @@ fun VigiaApp(
                     AutoAlertSection(
                         alertState = uiState.alertState,
                         onClearState = { viewModel.clearAlertState() },
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    // Sección de confirmación diferida (3 minutos después)
+                    ConfirmationSection(
+                        confirmationState = uiState.confirmationState,
+                        onClearState = { viewModel.clearConfirmationState() },
                         modifier = Modifier.padding(bottom = 12.dp)
                     )
                 }
@@ -820,6 +829,135 @@ fun AutoAlertSection(
                             color = MaterialTheme.colorScheme.outline,
                             modifier = Modifier.padding(top = 2.dp)
                         )
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+}
+
+/**
+ * Sección de confirmación diferida (3 minutos después de la alerta).
+ */
+@Composable
+fun ConfirmationSection(
+    confirmationState: ConfirmationState,
+    onClearState: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Solo mostrar si no está en idle
+    if (confirmationState is ConfirmationState.Idle) {
+        return
+    }
+
+    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = when (confirmationState) {
+                is ConfirmationState.Success -> Color(0xFFE3F2FD) // Azul claro
+                is ConfirmationState.Error -> Color(0xFFFFEBEE)
+                is ConfirmationState.Scheduled -> Color(0xFFF3E5F5) // Púrpura claro
+                is ConfirmationState.Sending -> MaterialTheme.colorScheme.surface
+                else -> MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            when (confirmationState) {
+                is ConfirmationState.Scheduled -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "⏱️ Confirmación programada",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF7B1FA2)
+                        )
+                        Text(
+                            text = "Se enviará imagen de confirmación en ${confirmationState.remainingSeconds}s",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF7B1FA2).copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Text(
+                            text = "Hora programada: ${timeFormat.format(Date(confirmationState.scheduledTimestamp))}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
+                is ConfirmationState.Sending -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "Enviando confirmación...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                is ConfirmationState.Success -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "📸 Confirmación enviada",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1565C0)
+                        )
+                        Text(
+                            text = "${confirmationState.message} • ${timeFormat.format(Date(confirmationState.timestamp))}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF1565C0).copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        TextButton(
+                            onClick = onClearState,
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Text("Ocultar", fontSize = 12.sp)
+                        }
+                    }
+                }
+                is ConfirmationState.Error -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "⚠️ Confirmación fallida",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFC62828)
+                        )
+                        Text(
+                            text = confirmationState.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFC62828).copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Text(
+                            text = "Hora: ${timeFormat.format(Date(confirmationState.timestamp))}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        TextButton(
+                            onClick = onClearState,
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Text("Ocultar", fontSize = 12.sp)
+                        }
                     }
                 }
                 else -> {}

@@ -372,3 +372,41 @@ Conectar el detector con el flujo automático de alerta a Telegram cuando se det
 
 ### Próximo paso recomendado
 Implementar segunda captura a los 3 minutos después de la primera alerta como confirmación del estado.
+
+---
+
+## Entrada 011 - Confirmación diferida a 3 minutos
+
+### Fecha
+2026-03-23
+
+### Objetivo
+Implementar segunda captura de confirmación exactamente 3 minutos después de una alerta automática exitosa.
+
+### Qué se hizo
+- añadido `ConfirmationState` con estados: Idle, Scheduled, Sending, Success, Error
+- `scheduleConfirmation()` programa el envío 3 minutos después usando coroutine delay
+- countdown en tiempo real que actualiza UI cada segundo (180s → 0s)
+- captura de imagen nueva en el momento de la confirmación (no reutiliza la primera)
+- caption claro: "📸 Confirmación 3 minutos después - Estado actual del área"
+- `cancelConfirmation()` para cancelar si se detiene la vigilancia
+- `ConfirmationSection` composable con diseño visual distintivo (púrpura/azul)
+- integración en MainViewModel con observación de estado
+- método `stopMonitoring()` cancela confirmación pendiente
+
+### Archivos/áreas relevantes
+- alert/AlertManager.kt (modificado - ConfirmationState, scheduleConfirmation, countdown, sendConfirmation)
+- ui/MainViewModel.kt (modificado - confirmationState en UI, cancelConfirmation en stopMonitoring)
+- MainActivity.kt (modificado - ConfirmationSection UI, imports)
+- docs/project-status.md (actualizado)
+- docs/dev-log.md (esta entrada)
+- docs/code-map.md (actualizado)
+
+### Limitaciones temporales
+- confirmación se pierde si la app se cierra antes de los 3 minutos (sin persistencia)
+- delay exacto de 3 minutos (180s), no configurable
+- sin reintentos si falla el envío de confirmación
+- una sola confirmación por alerta
+
+### Próximo paso recomendado
+MVP de vigilancia básica completo. Posibles mejoras futuras: reducir falsos positivos, ajustar sensibilidad desde UI, persistencia de alertas, múltiples ROIs.

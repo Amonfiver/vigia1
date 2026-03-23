@@ -130,15 +130,19 @@ MonitoringManager.detectionResult → MainViewModel
 - **Cuándo tocar**: Nunca mejorarlo, reemplazar por nueva implementación de RoiDetector
 
 ### AlertManager (alert/AlertManager.kt)
-- **Qué hace**: Gestiona envío automático de alertas cuando el detector indica cambio
+- **Qué hace**: Gestiona envío automático de alertas y confirmación diferida a 3 minutos
 - **Anti-spam**: Cooldown de 60 segundos entre alertas (evita spam continuo)
-- **Estados**: AlertState = Idle | Sending | Success(timestamp, message) | Error(timestamp, message) | Cooldown(remainingSeconds)
+- **Estados AlertState**: Idle | Sending | Success | Error | Cooldown
+- **Estados ConfirmationState**: Idle | Scheduled | Sending | Success | Error
+- **Confirmación**: Programada 3 minutos después de alerta exitosa, captura imagen nueva
 - **Métodos clave**:
   - onDetectionResult() - punto de entrada, verifica condiciones y dispara alerta
   - sendAlert() - envía mensaje + imagen de forma secuencial
-  - clearState() - resetea estado a Idle
-  - resetCooldown() - fuerza reset del cooldown (para testing)
-- **Cuándo tocar**: Cambiar cooldown, añadir cola de alertas, configuración de mensajes
+  - scheduleConfirmation() - programa confirmación a los 3 minutos con countdown
+  - sendConfirmation() - envía imagen de confirmación con caption apropiado
+  - cancelConfirmation() - cancela confirmación programada (útil al detener vigilancia)
+  - clearState() / clearConfirmationState() - resetea estados
+- **Cuándo tocar**: Cambiar cooldown, modificar delay de confirmación, añadir persistencia
 
 ### TelegramService (telegram/TelegramService.kt)
 - **Qué hace**: Envía mensajes e imágenes vía Telegram Bot API
@@ -174,8 +178,11 @@ Crear nueva clase implementando RoiDetector, inyectar en MonitoringManager.
 ### Para modificar comportamiento de alertas automáticas
 Modificar AlertManager (cooldown, lógica de envío, mensajes) sin tocar TelegramService.
 
-### Para segunda captura a los 3 minutos
-Usar coroutine delay o Handler.postDelayed() en AlertManager tras envío exitoso de primera alerta.
+### Para modificar delay de confirmación (3 minutos)
+Cambiar constante CONFIRMATION_DELAY_MS en AlertManager companion object.
+
+### Para persistir confirmación ante cierre de app
+Implementar persistencia del Job de confirmación usando WorkManager o alarmas del sistema.
 
 ### Para múltiples ROIs
 Cambiar currentRoi: Roi? por List<Roi> en MonitoringManager y adaptar UI.
@@ -219,3 +226,4 @@ Extender AlertState con nuevos tipos y modificar UI en AutoAlertSection.
 - Lifecycle-aware: Camera vinculado a lifecycle de Compose/Activity
 - Captura de imagen: FrameProcessor almacena último frame, conversión YUV→JPEG bajo demanda
 - Alertas automáticas: DetectionResult → AlertManager → TelegramService, con anti-spam integrado
+- Confirmación diferida: AlertManager programa segunda captura a 3 minutos con countdown en UI

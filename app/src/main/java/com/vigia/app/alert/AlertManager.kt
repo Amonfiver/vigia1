@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/alert/AlertManager.kt
  * Propósito: Gestor de alertas automáticas que dispara envíos a Telegram cuando se detectan cambios relevantes.
- * Responsabilidad principal: Escuchar resultados de detección, aplicar protección anti-spam y coordinar el envío de mensaje + imagen.
+ * Responsabilidad principal: Escuchar resultados de detección, aplicar protección anti-spam, coordinar el envío de mensaje + imagen y programar confirmación a los 3 minutos.
  * Alcance: Capa de alertas, puente entre detección y notificación.
  *
  * Decisiones técnicas relevantes:
@@ -10,17 +10,21 @@
  * - StateFlow para exponer estado del último envío (UI puede observar)
  * - Delegación a TelegramService para el envío real
  * - Captura de frame vía FrameProcessor.getLastFrameJpegBytes()
+ * - Confirmación diferida usando coroutine con delay de 3 minutos (180s)
+ * - Job de confirmación se cancela si la vigilancia se detiene
  *
  * Limitaciones temporales del MVP:
  * - Cooldown fijo de 60 segundos (no configurable aún)
  * - Sin cola de alertas pendientes (si falla, se pierde)
  * - Una sola alerta por evento (sin sistema de "escalada")
  * - Sin persistencia de alertas enviadas
- * - Segunda captura a los 3 minutos NO implementada todavía
+ * - Confirmación se pierde si la app se cierra antes de los 3 minutos
  *
  * Cambios recientes:
- * - Creación inicial del gestor de alertas automáticas
- * - Integración con MonitoringManager y TelegramService
+ * - Añadida confirmación diferida a los 3 minutos tras alerta exitosa
+ * - Estados ConfirmationScheduled y ConfirmationState para tracking
+ * - Método onFrameProcessorAvailable para captura en momento de confirmación
+ * - Cancelación de confirmación pendiente en cleanup()
  */
 package com.vigia.app.alert
 
@@ -46,6 +50,17 @@ sealed class AlertState {
 }
 
 /**
+ * Estado de la confirmación diferida (3 minutos después).
+ */
+sealed class ConfirmationState {
+    object Idle : ConfirmationState()
+    data class Scheduled(val scheduledTimestamp: Long, val remainingSeconds: Int) : ConfirmationState()
+    object Sending : ConfirmationState()
+    data class Success(val timestamp: Long, val message: String) : ConfirmationState()
+    data class Error(val timestamp: Long, val message: String) : ConfirmationState()
+}
+
+/**
  * Gestor de alertas automáticas basadas en detección de cambios.
  *
  * @param cooldownSeconds Tiempo mínimo entre alertas (default 60 segundos)
@@ -62,8 +77,19 @@ class AlertManager(
      */
     val alertState: StateFlow<AlertState> = _alertState.asStateFlow()
 
+    private val _confirmationState = MutableStateFlow<ConfirmationState>(ConfirmationState.Idle)
+    /**
+     * Estado de la confirmación diferida (para feedback en UI).
+     */
+    val confirmationState: StateFlow<ConfirmationState> = _confirmationState.asStateFlow()
+
     private var lastAlertTimestamp: Long = 0
     private var isSending = false
+    private var confirmationJob: Job? = null
+    
+    // Referencia al FrameProcessor para captura en momento de confirmación
+    private var frameProcessorRef: FrameProcessor? = null
+    private var telegramConfigRef: TelegramConfig? = null
 
     /**
      * Procesa un resultado de detección y dispara alerta si corresponde.
@@ -164,6 +190,8 @@ class AlertManager(
                             timestamp = lastAlertTimestamp,
                             message = "Alerta enviada correctamente"
                         )
+                        // Programar confirmación a los 3 minutos
+                        scheduleConfirmation(config, frameProcessor)
                     }
                     is TelegramResult.Error -> {
                         _alertState.value = AlertState.Error(
@@ -185,11 +213,131 @@ class AlertManager(
     }
 
     /**
+     * Programa la confirmación diferida a los 3 minutos.
+     */
+    private fun scheduleConfirmation(config: TelegramConfig, frameProcessor: FrameProcessor) {
+        // Guardar referencias para uso en el momento de la confirmación
+        telegramConfigRef = config
+        frameProcessorRef = frameProcessor
+        
+        // Cancelar job anterior si existe
+        confirmationJob?.cancel()
+        
+        val scheduledTime = System.currentTimeMillis() + CONFIRMATION_DELAY_MS
+        _confirmationState.value = ConfirmationState.Scheduled(
+            scheduledTimestamp = scheduledTime,
+            remainingSeconds = (CONFIRMATION_DELAY_MS / 1000).toInt()
+        )
+        
+        // Iniciar countdown para actualizar UI
+        startConfirmationCountdown(scheduledTime)
+        
+        // Programar el envío
+        confirmationJob = scope.launch {
+            delay(CONFIRMATION_DELAY_MS)
+            sendConfirmation()
+        }
+    }
+    
+    /**
+     * Inicia countdown para actualizar remainingSeconds en UI.
+     */
+    private fun startConfirmationCountdown(scheduledTime: Long) {
+        scope.launch {
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                val remaining = ((scheduledTime - now) / 1000).toInt()
+                
+                if (remaining <= 0) {
+                    // La confirmación está por enviarse, salir del countdown
+                    break
+                }
+                
+                // Actualizar estado con tiempo restante
+                val currentState = _confirmationState.value
+                if (currentState is ConfirmationState.Scheduled) {
+                    _confirmationState.value = ConfirmationState.Scheduled(
+                        scheduledTimestamp = scheduledTime,
+                        remainingSeconds = remaining
+                    )
+                }
+                
+                delay(1000) // Actualizar cada segundo
+            }
+        }
+    }
+
+    /**
+     * Envía la imagen de confirmación a los 3 minutos.
+     */
+    private suspend fun sendConfirmation() {
+        val config = telegramConfigRef
+        val frameProcessor = frameProcessorRef
+        
+        if (config == null || frameProcessor == null) {
+            _confirmationState.value = ConfirmationState.Error(
+                timestamp = System.currentTimeMillis(),
+                message = "No se pudo enviar confirmación: config o cámara no disponibles"
+            )
+            return
+        }
+        
+        _confirmationState.value = ConfirmationState.Sending
+        
+        try {
+            // Capturar imagen nueva (no reutilizar la primera)
+            val imageBytes = frameProcessor.getLastFrameJpegBytes()
+            
+            if (imageBytes == null) {
+                _confirmationState.value = ConfirmationState.Error(
+                    timestamp = System.currentTimeMillis(),
+                    message = "No se pudo capturar imagen de confirmación"
+                )
+                return
+            }
+            
+            // Enviar imagen de confirmación
+            val service = TelegramService(config)
+            val result = service.sendImage(
+                imageData = imageBytes,
+                caption = "📸 Confirmación 3 minutos después - Estado actual del área"
+            )
+            
+            when (result) {
+                is TelegramResult.Success -> {
+                    _confirmationState.value = ConfirmationState.Success(
+                        timestamp = System.currentTimeMillis(),
+                        message = "Confirmación enviada correctamente"
+                    )
+                }
+                is TelegramResult.Error -> {
+                    _confirmationState.value = ConfirmationState.Error(
+                        timestamp = System.currentTimeMillis(),
+                        message = "Error al enviar confirmación: ${result.message}"
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            _confirmationState.value = ConfirmationState.Error(
+                timestamp = System.currentTimeMillis(),
+                message = "Error inesperado en confirmación: ${e.message}"
+            )
+        }
+    }
+
+    /**
      * Resetea el estado de alerta a Idle.
      * Útil para limpiar mensajes de éxito/error en la UI.
      */
     fun clearState() {
         _alertState.value = AlertState.Idle
+    }
+    
+    /**
+     * Resetea el estado de confirmación a Idle.
+     */
+    fun clearConfirmationState() {
+        _confirmationState.value = ConfirmationState.Idle
     }
 
     /**
@@ -198,11 +346,30 @@ class AlertManager(
     fun resetCooldown() {
         lastAlertTimestamp = 0
     }
+    
+    /**
+     * Cancela la confirmación programada (útil al detener vigilancia).
+     */
+    fun cancelConfirmation() {
+        confirmationJob?.cancel()
+        confirmationJob = null
+        if (_confirmationState.value is ConfirmationState.Scheduled) {
+            _confirmationState.value = ConfirmationState.Idle
+        }
+    }
 
     /**
      * Libera recursos al destruir el manager.
      */
     fun cleanup() {
+        confirmationJob?.cancel()
         scope.cancel()
+    }
+    
+    companion object {
+        /**
+         * Delay para confirmación: 3 minutos en milisegundos.
+         */
+        const val CONFIRMATION_DELAY_MS = 3 * 60 * 1000L // 180,000 ms = 3 minutos
     }
 }

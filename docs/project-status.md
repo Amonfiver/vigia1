@@ -9,10 +9,9 @@ El MVP actual tiene:
 - **alertas automáticas a Telegram cuando se detecta cambio relevante**
 - mensaje "Minda Requiere Atención" + imagen automáticos
 - protección anti-spam básica (cooldown 60 segundos)
-- feedback visual del estado de alertas en la UI
+- **confirmación diferida a los 3 minutos con imagen nueva**
+- feedback visual del estado de alertas y confirmaciones en la UI
 - captura y envío manual de imagen como respaldo
-
-La segunda captura a los 3 minutos está pendiente para próxima iteración.
 
 ## Estado actual
 
@@ -37,11 +36,16 @@ La segunda captura a los 3 minutos está pendiente para próxima iteración.
 - captura real de imagen desde FrameProcessor
 - envío manual de imagen a Telegram con multipart/form-data
 - UI de captura con estados (Capturando, Enviando, Éxito, Error)
-- **AlertManager: gestor de alertas automáticas**
-- **Disparo automático cuando hasChange == true**
-- **Envío automático: mensaje "Minda Requiere Atención" + imagen**
-- **Protección anti-spam: cooldown de 60 segundos entre alertas**
-- **UI de alertas automáticas con estados (Enviando, Éxito, Error, Cooldown)**
+- AlertManager: gestor de alertas automáticas
+- Disparo automático cuando hasChange == true
+- Envío automático: mensaje "Minda Requiere Atención" + imagen
+- Protección anti-spam: cooldown de 60 segundos entre alertas
+- UI de alertas automáticas con estados (Enviando, Éxito, Error, Cooldown)
+- **Confirmación diferida a los 3 minutos tras alerta exitosa**
+- **Captura de imagen nueva en confirmación (no reutiliza la primera)**
+- **Caption claro: "Confirmación 3 minutos después - Estado actual del área"**
+- **UI de confirmación con countdown en tiempo real (180s → 0s)**
+- **Cancelación de confirmación al detener vigilancia**
 
 ### Implementado de forma provisional
 - detector básico desacoplado (interfaz RoiDetector)
@@ -52,27 +56,29 @@ La segunda captura a los 3 minutos está pendiente para próxima iteración.
 - captura usa último frame disponible, no frame exclusivo
 - cooldown fijo de 60 segundos (no configurable aún)
 - sin cola de alertas pendientes (si falla, se pierde)
+- **confirmación se pierde si la app se cierra antes de los 3 minutos**
 
 ### Aún NO implementado o pendiente
-- **segunda captura 3 minutos después** (próximo objetivo)
 - sensibilidad afinada / reducción de falsos positivos
 - ajustes dedicados para redefinir/borrar ROI
 - eliminación de ROI guardado
 - múltiples ROIs
+- persistencia de alertas/confirmaciones ante cierre de app
 
 ## Fase actual del MVP
 
-Fase actual: **alertas automáticas a Telegram implementadas**.
+Fase actual: **confirmación diferida a 3 minutos implementada**.
 
-La app detecta cambios en el ROI y envía automáticamente mensaje + imagen a Telegram cuando `hasChange == true`. Tiene protección anti-spam de 60 segundos para evitar envíos continuos.
+La app detecta cambios, envía alerta inmediata con mensaje + imagen, y programa automáticamente una segunda captura 3 minutos después con imagen nueva y caption de confirmación.
 
 ## Siguiente objetivo recomendado
 
-Implementar la **segunda captura a los 3 minutos** después de la alerta inicial:
-- programar captura diferida 3 minutos después de la primera alerta
-- enviar segunda imagen como confirmación del estado
-- mantener la arquitectura simple sin WorkManager si es posible
-- reutilizar el sistema de captura existente
+Considerar el MVP de vigilancia básica como **completo**. Posibles mejoras futuras:
+- Reducir falsos positivos con algoritmo de detección más robusto
+- Permitir ajustar sensibilidad/cooldown desde UI
+- Añadir persistencia de alertas ante cierre de app
+- Sistema de múltiples ROIs
+- Historial/visualizador de alertas pasadas
 
 ## Decisiones clave vigentes
 
@@ -83,8 +89,10 @@ Implementar la **segunda captura a los 3 minutos** después de la alerta inicial
 - El análisis usa frames reales de CameraX (ImageAnalysis).
 - Telegram se configura manualmente y se prueba antes de usar.
 - La captura de imagen reutiliza el último frame procesado.
-- **Las alertas automáticas tienen cooldown de 60 segundos para evitar spam.**
-- **La arquitectura mantiene separación: detección → monitorización → alerta → Telegram.**
+- Las alertas automáticas tienen cooldown de 60 segundos para evitar spam.
+- **Tras alerta exitosa, se programa confirmación a 3 minutos con imagen nueva.**
+- **La confirmación se cancela si se detiene la vigilancia.**
+- La arquitectura mantiene separación: detección → monitorización → alerta → Telegram.
 - Cada iteración debe ser pequeña, compilable y documentada.
 
 ## Riesgos y puntos de atención
@@ -95,7 +103,7 @@ Implementar la **segunda captura a los 3 minutos** después de la alerta inicial
 - captura puede no ser exactamente del momento del cambio (usa último frame)
 - cooldown de 60s puede ser muy largo o muy corto según el caso de uso
 - sin cola de alertas: si falla el envío, se pierde la alerta
-- segunda captura a 3 minutos no implementada todavía
+- **confirmación a 3 minutos se pierde si la app se cierra o el sistema la mata**
 
 ## Recordatorio de disciplina SDD
 
