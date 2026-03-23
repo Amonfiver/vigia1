@@ -8,22 +8,24 @@
  * - StateFlow para estado reactivo de la UI
  * - ViewModel de androidx.lifecycle para sobrevivir a cambios de configuración
  * - Inyección de dependencias mediante constructor para testabilidad
- * - Uso de MonitoringManager para gestión del estado de vigilancia
+ * - Uso de MonitoringManager para gestión del estado de vigilancia y análisis
  * - Persistencia de ROI mediante RoiRepository (DataStore)
+ * - Observación de resultados de detección para mostrar en UI
  *
  * Limitaciones temporales del MVP:
- * - Lógica de vigilancia simulada (no implementa detección real todavía)
+ * - Lógica de detección simulada (FrameData generado, no capturado de cámara real)
  * - Sin manejo avanzado de errores de red
  *
  * Cambios recientes:
- * - Añadida persistencia real del ROI con DataStore
- * - Recuperación automática del ROI guardado al iniciar
- * - Actualización correcta del estado hasRoi
+ * - Añadida observación de resultados de detección del MonitoringManager
+ * - Pasar ROI actual al iniciar vigilancia
+ * - Estado de detección reflejado en UI
  */
 package com.vigia.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vigia.app.detection.DetectionResult
 import com.vigia.app.domain.model.Roi
 import com.vigia.app.domain.model.TelegramConfig
 import com.vigia.app.domain.repository.RoiRepository
@@ -52,6 +54,7 @@ enum class ScreenMode {
  * @property telegramConfig Configuración actual de Telegram (puede ser null)
  * @property currentRoi ROI actualmente seleccionado (persistido o temporal)
  * @property hasRoi Indica si hay un ROI guardado persistentemente
+ * @property detectionResult Último resultado de detección (null si no hay análisis)
  */
 data class MainUiState(
     val screenMode: ScreenMode = ScreenMode.NORMAL,
@@ -59,7 +62,8 @@ data class MainUiState(
     val statusMessage: String = "Monitorización detenida",
     val telegramConfig: TelegramConfig? = null,
     val currentRoi: Roi? = null,
-    val hasRoi: Boolean = false
+    val hasRoi: Boolean = false,
+    val detectionResult: DetectionResult? = null
 )
 
 /**
@@ -93,6 +97,15 @@ class MainViewModel(
                             "Monitorización detenida"
                         }
                     )
+                }
+            }
+        }
+
+        // Observar resultados de detección
+        viewModelScope.launch {
+            monitoringManager.detectionResult.collect { result ->
+                _uiState.update { currentState ->
+                    currentState.copy(detectionResult = result)
                 }
             }
         }
@@ -161,10 +174,11 @@ class MainViewModel(
     }
 
     /**
-     * Inicia la vigilancia.
+     * Inicia la vigilancia con el ROI actual.
      */
     fun startMonitoring() {
-        monitoringManager.startMonitoring()
+        val roi = _uiState.value.currentRoi
+        monitoringManager.startMonitoring(roi)
     }
 
     /**
@@ -208,5 +222,10 @@ class MainViewModel(
      */
     fun hasTelegramConfig(): Boolean {
         return _uiState.value.telegramConfig != null
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        monitoringManager.cleanup()
     }
 }

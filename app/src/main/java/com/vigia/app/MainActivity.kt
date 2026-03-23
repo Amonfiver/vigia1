@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/MainActivity.kt
  * Propósito: Activity principal de VIGIA1, punto de entrada de la aplicación.
- * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara y modo de selección de ROI.
+ * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara, modo de selección de ROI y mostrar estado de detección.
  * Alcance: Capa de presentación, pantalla principal de la app.
  *
  * Decisiones técnicas relevantes:
@@ -11,16 +11,17 @@
  * - Solicitud de permisos en tiempo de ejecución para cámara
  * - Preview de cámara real usando CameraX
  * - Modo de selección de ROI con superposición táctil
+ * - Visualización de estado de detección en tiempo real
  *
  * Limitaciones temporales del MVP:
- * - Sin implementación real de monitorización (solo estado visual)
- * - Placeholders para configuración de Telegram (campos visuales sin guardado funcional)
- * - ROI guardado solo en memoria (persistencia en siguiente iteración)
+ * - FrameData de análisis es simulado (no se capturan frames reales de cámara)
+ * - Sin implementación real de envío a Telegram
+ * - Lógica de detección provisional que se reemplazará en futuras iteraciones
  *
  * Cambios recientes:
- * - Añadido modo de selección de ROI completo
- * - Integración de RoiSelector y RoiOverlay
- * - Botón para entrar en modo definición de ROI
+ * - Añadida visualización del estado de detección provisional
+ * - Integración de resultados de análisis en la UI
+ * - Indicador de cambio detectado con colores semánticos
  */
 package com.vigia.app
 
@@ -36,6 +37,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import com.vigia.app.camera.CameraPreview
 import com.vigia.app.data.local.DataStoreRoiRepository
 import com.vigia.app.data.local.DataStoreTelegramConfigRepository
+import com.vigia.app.detection.DetectionResult
 import com.vigia.app.ui.MainViewModel
 import com.vigia.app.ui.ScreenMode
 import com.vigia.app.ui.components.RoiOverlay
@@ -149,6 +152,7 @@ fun VigiaApp(
                 NormalModeControls(
                     isMonitoring = uiState.isMonitoring,
                     hasRoi = uiState.currentRoi != null,
+                    detectionResult = uiState.detectionResult,
                     onStartMonitoring = { viewModel.startMonitoring() },
                     onStopMonitoring = { viewModel.stopMonitoring() },
                     onDefineRoi = { viewModel.enterRoiSelectionMode() },
@@ -257,12 +261,13 @@ fun CameraArea(
 }
 
 /**
- * Controles del modo normal (vigilancia y definición de ROI).
+ * Controles del modo normal (vigilancia, definición de ROI y estado de detección).
  */
 @Composable
 fun NormalModeControls(
     isMonitoring: Boolean,
     hasRoi: Boolean,
+    detectionResult: DetectionResult?,
     onStartMonitoring: () -> Unit,
     onStopMonitoring: () -> Unit,
     onDefineRoi: () -> Unit,
@@ -272,6 +277,16 @@ fun NormalModeControls(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Indicador de estado de detección (solo cuando vigilancia activa)
+        if (isMonitoring) {
+            DetectionStatusCard(
+                detectionResult = detectionResult,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            )
+        }
+
         // Botones de vigilancia
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -324,6 +339,70 @@ fun NormalModeControls(
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(top = 4.dp)
             )
+        }
+    }
+}
+
+/**
+ * Tarjeta que muestra el estado de detección en tiempo real.
+ */
+@Composable
+fun DetectionStatusCard(
+    detectionResult: DetectionResult?,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                detectionResult == null -> MaterialTheme.colorScheme.surfaceVariant
+                detectionResult.hasChange -> Color(0xFFFFEBEE) // Rojo claro
+                else -> Color(0xFFE8F5E9) // Verde claro
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            when {
+                detectionResult == null -> {
+                    Text(
+                        text = "Análisis: Iniciando...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                detectionResult.hasChange -> {
+                    Text(
+                        text = "⚠️ Cambio detectado",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFC62828)
+                    )
+                    Text(
+                        text = detectionResult.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFC62828).copy(alpha = 0.8f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "✓ Sin cambio relevante",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF2E7D32)
+                    )
+                    Text(
+                        text = detectionResult.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF2E7D32).copy(alpha = 0.8f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
         }
     }
 }
