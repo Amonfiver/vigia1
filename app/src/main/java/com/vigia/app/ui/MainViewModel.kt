@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/ui/MainViewModel.kt
  * Propósito: ViewModel para la pantalla principal de VIGIA1.
- * Responsabilidad principal: Gestionar estado de UI, selección de ROI y coordinar acciones del usuario.
+ * Responsabilidad principal: Gestionar estado de UI, selección de ROI, persistencia y coordinar acciones del usuario.
  * Alcance: Capa de presentación, lógica de la pantalla principal.
  *
  * Decisiones técnicas relevantes:
@@ -9,16 +9,16 @@
  * - ViewModel de androidx.lifecycle para sobrevivir a cambios de configuración
  * - Inyección de dependencias mediante constructor para testabilidad
  * - Uso de MonitoringManager para gestión del estado de vigilancia
- * - Gestión de estado de selección de ROI (normal, seleccionando)
+ * - Persistencia de ROI mediante RoiRepository (DataStore)
  *
  * Limitaciones temporales del MVP:
  * - Lógica de vigilancia simulada (no implementa detección real todavía)
- * - Sin guardado persistente del ROI (solo en memoria temporal)
  * - Sin manejo avanzado de errores de red
  *
  * Cambios recientes:
- * - Añadido estado y lógica para modo de selección de ROI
- * - Integración con MonitoringManager
+ * - Añadida persistencia real del ROI con DataStore
+ * - Recuperación automática del ROI guardado al iniciar
+ * - Actualización correcta del estado hasRoi
  */
 package com.vigia.app.ui
 
@@ -50,7 +50,7 @@ enum class ScreenMode {
  * @property isMonitoring Indica si la vigilancia está activa
  * @property statusMessage Mensaje de estado mostrado al usuario
  * @property telegramConfig Configuración actual de Telegram (puede ser null)
- * @property currentRoi ROI actualmente seleccionado (temporal o guardado)
+ * @property currentRoi ROI actualmente seleccionado (persistido o temporal)
  * @property hasRoi Indica si hay un ROI guardado persistentemente
  */
 data class MainUiState(
@@ -100,17 +100,18 @@ class MainViewModel(
 
     /**
      * Carga datos guardados al inicializar.
+     * Recupera el ROI persistido y la configuración de Telegram.
      */
     private fun loadSavedData() {
         viewModelScope.launch {
-            val hasRoi = roiRepository?.hasRoi() ?: false
             val savedRoi = roiRepository?.getRoi()
+            val hasSavedRoi = roiRepository?.hasRoi() ?: false
             val telegramConfig = telegramConfigRepository?.getConfig()
 
             _uiState.update { currentState ->
                 currentState.copy(
-                    hasRoi = hasRoi,
                     currentRoi = savedRoi,
+                    hasRoi = hasSavedRoi,
                     telegramConfig = telegramConfig
                 )
             }
@@ -132,21 +133,24 @@ class MainViewModel(
     }
 
     /**
-     * Confirma un ROI seleccionado.
-     * En esta iteración solo actualiza el estado en memoria.
-     * El guardado persistente se implementará en la siguiente iteración.
+     * Confirma un ROI seleccionado y lo guarda persistentemente.
      *
      * @param roi ROI seleccionado por el usuario
      */
     fun confirmRoiSelection(roi: Roi) {
-        _uiState.update { currentState ->
-            currentState.copy(
-                currentRoi = roi,
-                screenMode = ScreenMode.NORMAL
-            )
+        viewModelScope.launch {
+            // Guardar en persistencia
+            roiRepository?.saveRoi(roi)
+            
+            // Actualizar estado de UI
+            _uiState.update { currentState ->
+                currentState.copy(
+                    currentRoi = roi,
+                    hasRoi = true,
+                    screenMode = ScreenMode.NORMAL
+                )
+            }
         }
-        // TODO: Guardar persistentemente en la siguiente iteración
-        // viewModelScope.launch { roiRepository?.saveRoi(roi) }
     }
 
     /**
@@ -184,7 +188,6 @@ class MainViewModel(
                 _uiState.update { it.copy(telegramConfig = config) }
             } catch (e: IllegalArgumentException) {
                 // Datos inválidos, no guardar
-                // En fase posterior se mostrará error al usuario
             }
         }
     }
@@ -192,7 +195,7 @@ class MainViewModel(
     /**
      * Verifica si hay un ROI seleccionado actualmente.
      *
-     * @return true si hay ROI seleccionado (temporal o guardado)
+     * @return true si hay ROI seleccionado (persistido o en memoria)
      */
     fun hasCurrentRoi(): Boolean {
         return _uiState.value.currentRoi != null
