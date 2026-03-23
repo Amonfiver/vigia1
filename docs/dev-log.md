@@ -409,4 +409,152 @@ Implementar segunda captura de confirmación exactamente 3 minutos después de u
 - una sola confirmación por alerta
 
 ### Próximo paso recomendado
-MVP de vigilancia básica completo. Posibles mejoras futuras: reducir falsos positivos, ajustar sensibilidad desde UI, persistencia de alertas, múltiples ROIs.
+Implementar estabilización del detector para reducir falsos positivos por picos breves.
+
+---
+
+## Entrada 012 - Estabilización del detector
+
+### Fecha
+2026-03-23
+
+### Objetivo
+Reducir falsos positivos implementando lógica de confirmación consecutiva antes de disparar alertas.
+
+### Qué se hizo
+- añadida capa de estabilización en MonitoringManager (no se tocó el detector)
+- lógica de detección consecutiva: requiere 3 detecciones seguidas para confirmar cambio
+- timeout de 2 segundos entre detecciones: si pasa más tiempo, se resetea el contador
+- mensajes de estado progresivos: "Detectando... (1/3)" → "Detectando... (2/3)" → "✓ Cambio CONFIRMADO"
+- parámetros configurables por constructor: consecutiveDetectionsRequired, stabilizationTimeoutMs
+- constantes en companion object: DEFAULT_CONSECUTIVE_DETECTIONS = 3, DEFAULT_STABILIZATION_TIMEOUT_MS = 2000
+- reseteo completo de estado de estabilización al detener vigilancia o cambiar ROI
+- método privado applyStabilization() que filtra el resultado crudo del detector
+- hasChange solo es true cuando el cambio está confirmado, nunca antes
+- documentación extensiva de la lógica de estabilización en la cabecera del archivo
+
+### Archivos/áreas relevantes
+- monitoring/MonitoringManager.kt (modificado - capa de estabilización completa)
+- docs/project-status.md (actualizado - sección de estabilización)
+- docs/dev-log.md (esta entrada)
+- docs/code-map.md (actualizado - descripción de MonitoringManager)
+
+### Limitaciones temporales
+- lógica de estabilización es simple (contador con timeout), no analiza patrones complejos
+- puede perder cambios muy rápidos pero reales (< 1 segundo de duración)
+- sin ajuste de sensibilidad desde UI (threshold, detecciones requeridas)
+- número de detecciones consecutivas fijo en código, no configurable por usuario final
+- detector base sigue siendo SimpleFrameDifferenceDetector (sin mejoras al algoritmo)
+
+### Cómo se prueba manualmente
+1. Iniciar vigilancia con ROI definido
+2. Hacer un cambio breve en el área (ej: pasar la mano rápido)
+3. Verificar que UI muestra "Detectando... (1/3)" pero NO dispara alerta
+4. Verificar que al cabo de unos segundos se resetea ("Cambio no confirmado - se perdió la señal")
+5. Hacer un cambio sostenido en el área (ej: dejar un objeto durante 2 segundos)
+6. Verificar que UI progresa: (1/3) → (2/3) → "✓ Cambio CONFIRMADO"
+7. Verificar que al confirmarse se dispara la alerta automática a Telegram
+8. Detener vigilancia y verificar que el estado se resetea correctamente
+
+### Próximo paso recomendado
+MVP de vigilancia básica **completo y estabilizado**. Posibles mejoras:
+- Ajustar sensibilidad/cooldown/detecciones consecutivas desde UI
+- Persistencia de alertas ante cierre de app
+- Sistema de múltiples ROIs
+- Historial/visualizador de alertas pasadas
+
+---
+
+## Entrada 013 - Cierre de fase: revisión y saneamiento
+
+### Fecha
+2026-03-23
+
+### Objetivo
+Revisar el estado real del proyecto tras generación del Gradle Wrapper, cerrar correctamente la fase anterior y dejar el proyecto listo para continuar.
+
+### Qué se encontró durante revisión
+1. **Gradle Wrapper generado con versión inestable**: Android Studio generó `gradle-9.0-milestone-1-bin.zip` (pre-release)
+2. **Error de compilación en RoiSelector.kt**: Faltaba import `androidx.compose.ui.unit.sp` para usar `12.sp`
+3. **Infraestructura incompleta**: El wrapper funcionaba pero no se había verificado compilación real
+4. **Documentación necesitaba actualización**: Project-status no reflejaba estado de cierre de fase
+
+### Qué se corrigió
+1. **gradle-wrapper.properties**: 
+   - Cambiado de `gradle-9.0-milestone-1-bin.zip` a `gradle-8.5-bin.zip` (versión estable)
+   - Añadida cabecera de documentación consistente con el proyecto
+
+2. **RoiSelector.kt**:
+   - Añadido import faltante: `import androidx.compose.ui.unit.sp`
+   - Compilación ahora exitosa
+
+3. **Verificación de build**:
+   - Ejecutado `.\gradlew.bat :app:compileDebugKotlin`
+   - Build exitoso con solo 2 warnings menores (no bloqueantes)
+
+### Archivos/áreas relevantes
+- gradle/wrapper/gradle-wrapper.properties (modificado - corrección de versión)
+- app/src/main/java/com/vigia/app/ui/components/RoiSelector.kt (modificado - import faltante)
+- docs/project-status.md (actualizado - fase marcada como CERRADA)
+- docs/dev-log.md (esta entrada)
+
+### Estado final de la fase
+
+**FASE CERRADA**: MVP funcional básico + estabilización
+
+| Aspecto | Estado |
+|---------|--------|
+| Compilación | ✅ ÉXITO |
+| Gradle Wrapper | ✅ 8.5 estable |
+| Funcionalidades MVP | ✅ Completas |
+| Estabilización detector | ✅ Implementada |
+| Documentación viva | ✅ Actualizada |
+| Warnings | 2 menores (no bloqueantes) |
+
+### Tracking de subtareas completadas
+
+- [x] Revisar estado del proyecto post-generación de wrapper
+- [x] Corregir versión de Gradle (9.0-milestone-1 → 8.5 estable)
+- [x] Corregir error de compilación (import faltante en RoiSelector.kt)
+- [x] Verificar build exitoso
+- [x] Actualizar docs/project-status.md (fase cerrada)
+- [x] Añadir entrada en docs/dev-log.md (cierre de fase)
+- [x] Documentar estado final y tracking completo
+
+### Limitaciones temporales
+- Build tiene 2 warnings menores (no afectan funcionamiento)
+- No se añadieron nuevas funcionalidades (solo correcciones)
+- Pruebas manuales en dispositivo real pendientes (requieren despliegue)
+
+### Cómo verificar manualmente el estado actual
+
+1. **Verificar compilación**:
+   ```bash
+   .\gradlew.bat :app:compileDebugKotlin
+   ```
+   Resultado esperado: `BUILD SUCCESSFUL`
+
+2. **Verificar estructura**:
+   - Revisar que `gradle/wrapper/gradle-wrapper.properties` apunte a Gradle 8.5
+
+3. **Verificar código**:
+   - Revisar que `RoiSelector.kt` tenga import de `androidx.compose.ui.unit.sp`
+
+4. **Para probar en dispositivo**:
+   ```bash
+   .\gradlew.bat :app:installDebug
+   ```
+
+### Fase cerrada
+
+✅ **La fase MVP funcional básico + estabilización puede darse por CERRADA**
+
+El proyecto está listo para continuar con nuevas mejoras en fases posteriores.
+
+### Siguiente paso recomendado
+
+Decidir próxima fase de desarrollo:
+- Opción A: Ajustes de sensibilidad desde UI
+- Opción B: Persistencia de alertas ante cierre de app  
+- Opción C: Sistema de múltiples ROIs
+- Opción D: Historial de alertas

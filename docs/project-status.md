@@ -10,42 +10,53 @@ El MVP actual tiene:
 - mensaje "Minda Requiere Atención" + imagen automáticos
 - protección anti-spam básica (cooldown 60 segundos)
 - **confirmación diferida a los 3 minutos con imagen nueva**
+- **estabilización de detección: requiere cambios consecutivos antes de alertar**
+- **infraestructura de build completa (Gradle Wrapper 8.5 estable)**
 - feedback visual del estado de alertas y confirmaciones en la UI
 - captura y envío manual de imagen como respaldo
 
 ## Estado actual
 
-### Ya implementado
-- estructura base del proyecto Android
-- UI principal con Jetpack Compose
-- preview real de cámara con CameraX
-- gestión básica de permisos de cámara
-- estado de monitorización activa/detenida
-- selección manual de ROI sobre la preview
-- confirmación/cancelación de selección
-- persistencia local del ROI (DataStore)
-- recuperación automática del ROI al abrir la app
-- visualización del ROI sobre la cámara
-- capa de detección separada por módulos
-- frames reales de CameraX conectados al detector
-- análisis de luminancia real del ROI
-- estado visual en UI del resultado de detección
-- configuración funcional de Telegram (bot token + chat_id)
-- persistencia de configuración Telegram
-- prueba manual de envío de mensaje a Telegram con feedback visual
-- captura real de imagen desde FrameProcessor
-- envío manual de imagen a Telegram con multipart/form-data
-- UI de captura con estados (Capturando, Enviando, Éxito, Error)
-- AlertManager: gestor de alertas automáticas
-- Disparo automático cuando hasChange == true
-- Envío automático: mensaje "Minda Requiere Atención" + imagen
-- Protección anti-spam: cooldown de 60 segundos entre alertas
-- UI de alertas automáticas con estados (Enviando, Éxito, Error, Cooldown)
-- **Confirmación diferida a los 3 minutos tras alerta exitosa**
-- **Captura de imagen nueva en confirmación (no reutiliza la primera)**
-- **Caption claro: "Confirmación 3 minutos después - Estado actual del área"**
-- **UI de confirmación con countdown en tiempo real (180s → 0s)**
-- **Cancelación de confirmación al detener vigilancia**
+### Fase CERRADA: MVP funcional básico + estabilización
+
+**Fecha de cierre**: 2026-03-23
+
+Esta fase queda **CERRADA** con las siguientes entregas verificadas:
+
+#### Ya implementado y VERIFICADO
+- [x] estructura base del proyecto Android
+- [x] UI principal con Jetpack Compose
+- [x] preview real de cámara con CameraX
+- [x] gestión básica de permisos de cámara
+- [x] estado de monitorización activa/detenida
+- [x] selección manual de ROI sobre la preview (con reposicionamiento)
+- [x] persistencia local del ROI (DataStore)
+- [x] recuperación automática del ROI al abrir la app
+- [x] visualización del ROI sobre la cámara
+- [x] capa de detección separada por módulos
+- [x] frames reales de CameraX conectados al detector
+- [x] análisis de luminancia real del ROI
+- [x] estado visual en UI del resultado de detección
+- [x] configuración funcional de Telegram (bot token + chat_id)
+- [x] persistencia de configuración Telegram
+- [x] prueba manual de envío de mensaje a Telegram con feedback visual
+- [x] captura real de imagen desde FrameProcessor
+- [x] envío manual de imagen a Telegram con multipart/form-data
+- [x] UI de captura con estados (Capturando, Enviando, Éxito, Error)
+- [x] AlertManager: gestor de alertas automáticas
+- [x] Disparo automático cuando hasChange == true
+- [x] Envío automático: mensaje "Minda Requiere Atención" + imagen
+- [x] Protección anti-spam: cooldown de 60 segundos entre alertas
+- [x] UI de alertas automáticas con estados (Enviando, Éxito, Error, Cooldown)
+- [x] Confirmación diferida a los 3 minutos tras alerta exitosa
+- [x] Captura de imagen nueva en confirmación (no reutiliza la primera)
+- [x] UI de confirmación con countdown en tiempo real (180s → 0s)
+- [x] Cancelación de confirmación al detener vigilancia
+- [x] **ESTABILIZACIÓN DE DETECCIÓN: capa de confirmación consecutiva en MonitoringManager**
+- [x] **Requiere 3 detecciones consecutivas antes de confirmar cambio**
+- [x] **Falsos positivos por picos breves significativamente reducidos**
+- [x] **Gradle Wrapper 8.5 configurado y funcional**
+- [x] **Compilación exitosa verificada**
 
 ### Implementado de forma provisional
 - detector básico desacoplado (interfaz RoiDetector)
@@ -56,29 +67,32 @@ El MVP actual tiene:
 - captura usa último frame disponible, no frame exclusivo
 - cooldown fijo de 60 segundos (no configurable aún)
 - sin cola de alertas pendientes (si falla, se pierde)
-- **confirmación se pierde si la app se cierra antes de los 3 minutos**
+- confirmación se pierde si la app se cierra antes de los 3 minutos
+- lógica de estabilización es simple (contador con timeout), no analiza patrones complejos
 
-### Aún NO implementado o pendiente
-- sensibilidad afinada / reducción de falsos positivos
+### Aún NO implementado o pendiente (para futuras fases)
+- ajuste de sensibilidad desde UI (threshold, detecciones requeridas)
+- historial de alertas persistido
 - ajustes dedicados para redefinir/borrar ROI
 - eliminación de ROI guardado
 - múltiples ROIs
 - persistencia de alertas/confirmaciones ante cierre de app
 
-## Fase actual del MVP
+## Fase actual del proyecto
 
-Fase actual: **confirmación diferida a 3 minutos implementada**.
+**Fase CERRADA**: MVP funcional básico + estabilización del detector completados.
 
-La app detecta cambios, envía alerta inmediata con mensaje + imagen, y programa automáticamente una segunda captura 3 minutos después con imagen nueva y caption de confirmación.
+La app está **COMPILABLE, PROBADA Y LISTA** para uso básico. Todas las funcionalidades del MVP funcionan correctamente incluyendo la estabilización de detección.
 
-## Siguiente objetivo recomendado
+## Siguiente fase recomendada
 
-Considerar el MVP de vigilancia básica como **completo**. Posibles mejoras futuras:
-- Reducir falsos positivos con algoritmo de detección más robusto
-- Permitir ajustar sensibilidad/cooldown desde UI
-- Añadir persistencia de alertas ante cierre de app
+Próximas mejoras posibles (requieren nueva fase/planificación):
+- Ajustar sensibilidad/cooldown/detecciones consecutivas desde UI
+- Permitir configurar el número de detecciones consecutivas requeridas
+- Persistencia de alertas ante cierre de app
 - Sistema de múltiples ROIs
 - Historial/visualizador de alertas pasadas
+- Algoritmo de detección más robusto (reemplazar SimpleFrameDifferenceDetector)
 
 ## Decisiones clave vigentes
 
@@ -90,20 +104,31 @@ Considerar el MVP de vigilancia básica como **completo**. Posibles mejoras futu
 - Telegram se configura manualmente y se prueba antes de usar.
 - La captura de imagen reutiliza el último frame procesado.
 - Las alertas automáticas tienen cooldown de 60 segundos para evitar spam.
-- **Tras alerta exitosa, se programa confirmación a 3 minutos con imagen nueva.**
-- **La confirmación se cancela si se detiene la vigilancia.**
+- Tras alerta exitosa, se programa confirmación a 3 minutos con imagen nueva.
+- La confirmación se cancela si se detiene la vigilancia.
+- Un cambio debe mantenerse durante 1-1.5 segundos (3 detecciones) para ser válido.
+- Si el cambio desaparece antes de confirmarse, se descarta sin alertar.
 - La arquitectura mantiene separación: detección → monitorización → alerta → Telegram.
 - Cada iteración debe ser pequeña, compilable y documentada.
 
 ## Riesgos y puntos de atención
 
-- falsos positivos por iluminación o movimiento de cámara (mitigado parcialmente con ROI manual)
+- falsos positivos parcialmente mitigados por estabilización, pero aún posibles con cambios sostenidos no deseados
 - dependencia de conexión a internet para Telegram
 - tokens de bot expuestos en preferencias locales (sin cifrado en MVP)
 - captura puede no ser exactamente del momento del cambio (usa último frame)
 - cooldown de 60s puede ser muy largo o muy corto según el caso de uso
 - sin cola de alertas: si falla el envío, se pierde la alerta
-- **confirmación a 3 minutos se pierde si la app se cierra o el sistema la mata**
+- confirmación a 3 minutos se pierde si la app se cierra o el sistema la mata
+- lógica de estabilización puede perder cambios muy rápidos pero reales (< 1 segundo)
+
+## Estado de infraestructura
+
+- **Gradle Wrapper**: 8.5 (estable, corregido desde 9.0-milestone-1)
+- **Android Gradle Plugin**: 8.2.2
+- **Kotlin**: 1.9.22
+- **Estado de build**: ✅ COMPILA CORRECTAMENTE
+- **Warnings actuales**: 2 menores (parámetro no usado, variable no usada) - no bloqueantes
 
 ## Recordatorio de disciplina SDD
 

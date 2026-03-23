@@ -30,8 +30,8 @@ app/src/main/java/com/vigia/app/
 │   └── repository/
 │       ├── RoiRepository.kt           # Interfaz persistencia ROI
 │       └── TelegramConfigRepository.kt # Interfaz persistencia Telegram
-├── monitoring/                        # Coordinación vigilancia
-│   └── MonitoringManager.kt           # Estado vigilancia + análisis periódico
+├── monitoring/                        # Coordinación vigilancia + estabilización
+│   └── MonitoringManager.kt           # Estado vigilancia + análisis periódico + CAPA DE ESTABILIZACIÓN
 ├── telegram/                          # Envío de alertas
 │   └── TelegramService.kt             # Servicio Telegram con OkHttp (mensajes + imágenes)
 ├── ui/                                # Interfaz de usuario
@@ -47,11 +47,17 @@ app/src/main/java/com/vigia/app/
 
 ## Flujo de datos principal
 
-### Análisis y detección
+### Análisis y detección (con estabilización)
 ```
 CameraX → FrameProcessor → FrameData → MonitoringManager
                                               ↓
-RoiDetector.analyze(frameData, roi) → DetectionResult
+                              [Capa de estabilización]
+                              Requiere 3 detecciones consecutivas
+                              dentro de 2 segundos para confirmar
+                                              ↓
+RoiDetector.analyze(frameData, roi) → DetectionResult crudo
+                                              ↓
+                              applyStabilization() → DetectionResult estabilizado
                                               ↓
                                        MainViewModel → UI
 ```
@@ -72,11 +78,11 @@ UI → MainViewModel → FrameProcessor.getLastFrameJpegBytes()
                               TelegramResult → UI
 ```
 
-### Alertas automáticas (flujo cuando se detecta cambio)
+### Alertas automáticas (flujo cuando se detecta cambio confirmado)
 ```
 MonitoringManager.detectionResult → MainViewModel
                                               ↓
-                              if hasChange == true
+                         if hasChange == true (cambio confirmado por estabilización)
                                               ↓
                               AlertManager.onDetectionResult()
                                               ↓
@@ -110,11 +116,17 @@ MonitoringManager.detectionResult → MainViewModel
 - **Cuándo tocar**: Optimizaciones de rendimiento, cambio de resolución, mejoras en captura
 
 ### MonitoringManager (monitoring/MonitoringManager.kt)
-- **Qué hace**: Coordina vigilancia activa y análisis periódico
+- **Qué hace**: Coordina vigilancia activa, análisis periódico Y **estabilización de detección**
 - **Recibe**: Flujo de FrameData vía connectCameraFrames()
 - **Hace**: Analiza cada 500ms usando RoiDetector
-- **Emite**: Estado de vigilancia + DetectionResult
-- **Cuándo tocar**: Cambios en frecuencia de análisis, lógica de trigger
+- **CAPA DE ESTABILIZACIÓN**: 
+  - Requiere 3 detecciones consecutivas antes de confirmar cambio (configurable)
+  - Timeout de 2 segundos entre detecciones, si se pasa se resetea contador
+  - Mensajes progresivos: "Detectando... (1/3)" → "✓ Cambio CONFIRMADO"
+  - hasChange solo es true cuando el cambio está confirmado
+- **Emite**: Estado de vigilancia + DetectionResult estabilizado
+- **Parámetros configurables**: consecutiveDetectionsRequired, stabilizationTimeoutMs
+- **Cuándo tocar**: Cambios en frecuencia de análisis, lógica de estabilización, umbral de confirmación
 
 ### RoiDetector (detection/RoiDetector.kt)
 - **Qué es**: Interfaz para estrategias de detección
@@ -127,6 +139,7 @@ MonitoringManager.detectionResult → MainViewModel
 - **Algoritmo**: Diferencia de checksum normalizado
 - **Umbral**: Configurable (default 30)
 - **Estado**: PROVISIONAL - debe reemplazarse por análisis más robusto
+- **Nota**: La estabilización NO está aquí, está en MonitoringManager (capa superior)
 - **Cuándo tocar**: Nunca mejorarlo, reemplazar por nueva implementación de RoiDetector
 
 ### AlertManager (alert/AlertManager.kt)
@@ -172,11 +185,19 @@ MonitoringManager.detectionResult → MainViewModel
 
 ## Puntos de extensión recomendados
 
-### Para mejorar detección
-Crear nueva clase implementando RoiDetector, inyectar en MonitoringManager.
+### Para ajustar estabilización de detección
+Modificar parámetros en constructor de MonitoringManager:
+- consecutiveDetectionsRequired: número de detecciones consecutivas (default: 3)
+- stabilizationTimeoutMs: tiempo máximo entre detecciones (default: 2000ms)
+
+### Para mejorar detección (reemplazar algoritmo)
+Crear nueva clase implementando RoiDetector, inyectar en MonitoringManager. La capa de estabilización seguirá funcionando.
 
 ### Para modificar comportamiento de alertas automáticas
 Modificar AlertManager (cooldown, lógica de envío, mensajes) sin tocar TelegramService.
+
+### Para permitir ajuste de estabilización desde UI
+Añadir campos en MainUiState, métodos en MainViewModel para modificar los parámetros de MonitoringManager dinámicamente.
 
 ### Para modificar delay de confirmación (3 minutos)
 Cambiar constante CONFIRMATION_DELAY_MS en AlertManager companion object.
@@ -185,7 +206,7 @@ Cambiar constante CONFIRMATION_DELAY_MS en AlertManager companion object.
 Implementar persistencia del Job de confirmación usando WorkManager o alarmas del sistema.
 
 ### Para múltiples ROIs
-Cambiar currentRoi: Roi? por List<Roi> en MonitoringManager y adaptar UI.
+Cambiar currentRoi: Roi? por List<Roi> en MonitoringManager y adaptar UI. La estabilización funciona igual para cada ROI.
 
 ### Para reintentos de Telegram
 Ampliar AlertManager o TelegramService con cola de mensajes pendientes y lógica de reintento.
@@ -227,3 +248,32 @@ Extender AlertState con nuevos tipos y modificar UI en AutoAlertSection.
 - Captura de imagen: FrameProcessor almacena último frame, conversión YUV→JPEG bajo demanda
 - Alertas automáticas: DetectionResult → AlertManager → TelegramService, con anti-spam integrado
 - Confirmación diferida: AlertManager programa segunda captura a 3 minutos con countdown en UI
+- **Estabilización de detección**: Capa en MonitoringManager que requiere 3 detecciones consecutivas antes de confirmar cambio, reduciendo falsos positivos por picos breves
+
+## Estado de infraestructura (post-revisión)
+
+Después de la revisión de cierre de fase:
+
+- **Gradle Wrapper**: 8.5 (corregido desde 9.0-milestone-1 inestable)
+- **Android Gradle Plugin**: 8.2.2
+- **Kotlin**: 1.9.22
+- **Estado de build**: ✅ COMPILA CORRECTAMENTE
+- **Scripts disponibles**: `gradlew` (Linux/Mac), `gradlew.bat` (Windows)
+- **Warnings**: 2 menores (no bloqueantes)
+
+### Comandos útiles
+
+```bash
+# Compilar
+.\gradlew.bat :app:compileDebugKotlin
+
+# Instalar en dispositivo
+.\gradlew.bat :app:installDebug
+
+# Limpiar build
+.\gradlew.bat clean
+```
+
+### Fase actual
+
+**CERRADA**: MVP funcional básico + estabilización del detector completados.
