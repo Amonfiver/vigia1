@@ -24,3 +24,19 @@ Al terminar cada tarea:
 - lista los archivos creados o modificados,
 - indica riesgos o limitaciones,
 - recomienda el siguiente paso.
+
+## Documentación viva obligatoria
+
+Este proyecto mantiene documentación viva para permitir continuidad entre agentes y desarrolladores.
+
+Antes de cada tarea, debes leer:
+- docs/project-status.md
+- docs/dev-log.md
+- docs/code-map.md
+
+Después de cada tarea con cambios relevantes, debes actualizar:
+- docs/project-status.md
+- docs/dev-log.md
+- docs/code-map.md
+
+La documentación debe reflejar el estado real del proyecto, sin exagerar avances ni ocultar limitaciones temporales.
