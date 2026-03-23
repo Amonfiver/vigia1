@@ -8,12 +8,15 @@
  * - StateFlow para estado reactivo de la UI
  * - ViewModel de androidx.lifecycle para sobrevivir a cambios de configuración
  * - Inyección de dependencias mediante constructor para testabilidad
+ * - Uso de MonitoringManager para gestión del estado de vigilancia
  *
  * Limitaciones temporales del MVP:
  * - Lógica de vigilancia simulada (no implementa detección real todavía)
  * - Sin manejo avanzado de errores de red
  *
- * Cambios recientes: Creación inicial del ViewModel.
+ * Cambios recientes:
+ * - Integración con MonitoringManager
+ * - Mejorada separación de responsabilidades
  */
 package com.vigia.app.ui
 
@@ -22,6 +25,7 @@ import androidx.lifecycle.viewModelScope
 import com.vigia.app.domain.model.TelegramConfig
 import com.vigia.app.domain.repository.RoiRepository
 import com.vigia.app.domain.repository.TelegramConfigRepository
+import com.vigia.app.monitoring.MonitoringManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,10 +52,12 @@ data class MainUiState(
  *
  * @param roiRepository Repositorio para persistencia de ROI
  * @param telegramConfigRepository Repositorio para configuración de Telegram
+ * @param monitoringManager Gestor del estado de monitorización
  */
 class MainViewModel(
     private val roiRepository: RoiRepository? = null,
-    private val telegramConfigRepository: TelegramConfigRepository? = null
+    private val telegramConfigRepository: TelegramConfigRepository? = null,
+    private val monitoringManager: MonitoringManager = MonitoringManager()
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -59,6 +65,22 @@ class MainViewModel(
 
     init {
         loadSavedData()
+        
+        // Observar cambios en el estado de monitorización
+        viewModelScope.launch {
+            monitoringManager.isMonitoring.collect { isMonitoring ->
+                _uiState.update { currentState ->
+                    currentState.copy(
+                        isMonitoring = isMonitoring,
+                        statusMessage = if (isMonitoring) {
+                            "Monitorización activa"
+                        } else {
+                            "Monitorización detenida"
+                        }
+                    )
+                }
+            }
+        }
     }
 
     /**
@@ -80,29 +102,16 @@ class MainViewModel(
 
     /**
      * Inicia la vigilancia.
-     * En el MVP, solo cambia el estado visual. La detección real se implementará después.
      */
     fun startMonitoring() {
-        _uiState.update { currentState ->
-            currentState.copy(
-                isMonitoring = true,
-                statusMessage = "Monitorización activa"
-            )
-        }
-        // TODO: Implementar inicio real de monitorización en fase posterior
+        monitoringManager.startMonitoring()
     }
 
     /**
      * Detiene la vigilancia.
      */
     fun stopMonitoring() {
-        _uiState.update { currentState ->
-            currentState.copy(
-                isMonitoring = false,
-                statusMessage = "Monitorización detenida"
-            )
-        }
-        // TODO: Implementar parada real de monitorización en fase posterior
+        monitoringManager.stopMonitoring()
     }
 
     /**

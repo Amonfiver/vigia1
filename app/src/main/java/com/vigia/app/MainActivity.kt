@@ -9,13 +9,16 @@
  * - ComponentActivity como base para Compose
  * - ViewModel para gestión de estado
  * - Solicitud de permisos en tiempo de ejecución para cámara
+ * - Preview de cámara real usando CameraX
  *
  * Limitaciones temporales del MVP:
- * - Sin preview de cámara real todavía (placeholder visual)
- * - Sin implementación real de monitorización
- * - Placeholders para configuración de Telegram
+ * - Sin implementación real de monitorización (solo estado visual)
+ * - Placeholders para configuración de Telegram (campos visuales sin guardado)
  *
- * Cambios recientes: Creación inicial de la Activity con UI básica.
+ * Cambios recientes:
+ * - Integración de CameraPreview real con CameraX
+ * - Mejorada gestión de permisos con estado visual
+ * - Añadida pantalla de permiso no concedido
  */
 package com.vigia.app
 
@@ -31,14 +34,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.vigia.app.camera.CameraPreview
 import com.vigia.app.data.local.DataStoreRoiRepository
 import com.vigia.app.data.local.DataStoreTelegramConfigRepository
 import com.vigia.app.ui.MainViewModel
+import com.vigia.app.utils.PermissionsHelper
 
 /**
  * Activity principal de VIGIA.
@@ -63,38 +69,32 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    VigiaApp(viewModel = viewModel)
+                    VigiaApp(
+                        viewModel = viewModel,
+                        onRequestPermission = { requestCameraPermission() }
+                    )
                 }
             }
         }
 
-        // Solicitar permiso de cámara si no está concedido
-        checkCameraPermission()
+        // Solicitar permiso de cámara al inicio si no está concedido
+        if (!PermissionsHelper.hasCameraPermission(this)) {
+            requestCameraPermission()
+        }
     }
 
     /**
-     * Verifica y solicita permiso de cámara si es necesario.
+     * Solicita el permiso de cámara al usuario.
      */
-    private fun checkCameraPermission() {
-        when {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED -> {
-                // Permiso ya concedido, nada que hacer
-            }
-            else -> {
-                requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-            }
-        }
+    private fun requestCameraPermission() {
+        requestPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        if (!isGranted) {
-            // Permiso denegado - en fase posterior se mostrará mensaje al usuario
-        }
+        // El resultado se maneja en la UI mediante re-composición
+        // ya que PermissionsHelper.hasCameraPermission() se evalúa en cada recomposición
     }
 }
 
@@ -102,10 +102,16 @@ class MainActivity : ComponentActivity() {
  * Composable raíz de la aplicación VIGIA.
  *
  * @param viewModel ViewModel para gestión de estado
+ * @param onRequestPermission Callback para solicitar permiso de cámara
  */
 @Composable
-fun VigiaApp(viewModel: MainViewModel) {
+fun VigiaApp(
+    viewModel: MainViewModel,
+    onRequestPermission: () -> Unit
+) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val hasCameraPermission = PermissionsHelper.hasCameraPermission(context)
 
     Column(
         modifier = Modifier
@@ -118,17 +124,19 @@ fun VigiaApp(viewModel: MainViewModel) {
             text = "VIGIA",
             fontSize = 32.sp,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 24.dp, bottom = 16.dp)
+            modifier = Modifier.padding(top = 16.dp, bottom = 12.dp)
         )
 
-        // Placeholder de preview de cámara
-        CameraPreviewPlaceholder(
+        // Área de preview de cámara o mensaje de permiso
+        CameraPreviewArea(
+            hasPermission = hasCameraPermission,
+            onRequestPermission = onRequestPermission,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
         )
 
-        // Texto de estado
+        // Texto de estado de monitorización
         Text(
             text = uiState.statusMessage,
             fontSize = 18.sp,
@@ -137,7 +145,7 @@ fun VigiaApp(viewModel: MainViewModel) {
             } else {
                 MaterialTheme.colorScheme.error
             },
-            modifier = Modifier.padding(vertical = 16.dp)
+            modifier = Modifier.padding(vertical = 12.dp)
         )
 
         // Botones de control
@@ -145,34 +153,61 @@ fun VigiaApp(viewModel: MainViewModel) {
             isMonitoring = uiState.isMonitoring,
             onStartClick = { viewModel.startMonitoring() },
             onStopClick = { viewModel.stopMonitoring() },
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier.padding(bottom = 12.dp)
         )
 
         // Sección de configuración de Telegram (placeholder)
         TelegramConfigSection(
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier.padding(bottom = 8.dp)
         )
     }
 }
 
 /**
- * Placeholder visual para el área de preview de cámara.
+ * Área que muestra la preview de cámara o un mensaje si no hay permiso.
  *
- * @param modifier Modificador para layout
+ * @param hasPermission Indica si el permiso de cámara está concedido
+ * @param onRequestPermission Callback para solicitar permiso
+ * @param modifier Modificador para el layout
  */
 @Composable
-fun CameraPreviewPlaceholder(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "Preview de cámara\n(disponible en fase posterior)",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium
+fun CameraPreviewArea(
+    hasPermission: Boolean,
+    onRequestPermission: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (hasPermission) {
+        // Mostrar preview de cámara real
+        CameraPreview(
+            modifier = modifier,
+            onError = { error ->
+                // En fase posterior se manejará el error de forma más específica
+            }
         )
+    } else {
+        // Mostrar mensaje solicitando permiso
+        Box(
+            modifier = modifier
+                .background(MaterialTheme.colorScheme.errorContainer)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Se necesita permiso de cámara",
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = onRequestPermission) {
+                    Text("Conceder permiso")
+                }
+            }
+        }
     }
 }
 
