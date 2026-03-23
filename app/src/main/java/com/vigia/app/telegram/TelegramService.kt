@@ -6,6 +6,7 @@
  *
  * Decisiones técnicas relevantes:
  * - OkHttp para peticiones HTTP asíncronas
+ * - Multipart para envío de imágenes (sendPhoto)
  * - Coroutines con suspend functions para operaciones de red
  * - Validación de configuración antes de enviar
  * - Manejo básico de errores de red y respuesta
@@ -15,9 +16,11 @@
  * - Sin cola de mensajes pendientes
  * - Sin caché de imágenes
  * - Validación simple de respuesta (solo código HTTP 200)
+ * - Sin compresión avanzada de imágenes
  *
  * Cambios recientes:
  * - Implementación real de envío de mensajes con OkHttp
+ * - Implementación de sendImage con multipart/form-data
  * - Manejo de errores y resultado de operación
  */
 package com.vigia.app.telegram
@@ -25,9 +28,11 @@ package com.vigia.app.telegram
 import com.vigia.app.domain.model.TelegramConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -70,7 +75,7 @@ class TelegramService(private val config: TelegramConfig) {
 
         val url = "${TelegramConfig.TELEGRAM_API_BASE}/bot${config.botToken}/sendMessage"
 
-        val requestBody = FormBody.Builder()
+        val requestBody = okhttp3.FormBody.Builder()
             .add("chat_id", config.chatId)
             .add("text", message)
             .add("parse_mode", "HTML")
@@ -85,10 +90,9 @@ class TelegramService(private val config: TelegramConfig) {
     }
 
     /**
-     * Envía una imagen por Telegram.
-     * NOTA: Implementación básica para MVP. En futuras iteraciones se expandirá.
+     * Envía una imagen por Telegram usando sendPhoto con multipart/form-data.
      *
-     * @param imageData Bytes de la imagen a enviar
+     * @param imageData Bytes de la imagen (JPEG recomendado)
      * @param caption Texto opcional asociado a la imagen
      * @return Resultado de la operación
      */
@@ -100,11 +104,57 @@ class TelegramService(private val config: TelegramConfig) {
             )
         }
 
-        // TODO: Implementar envío multipart de imagen en iteración de captura
-        return@withContext TelegramResult.Error(
-            NotImplementedError("Envío de imágenes pendiente"),
-            "Envío de imágenes no implementado todavía"
-        )
+        val url = "${TelegramConfig.TELEGRAM_API_BASE}/bot${config.botToken}/sendPhoto"
+
+        // Crear multipart body con la imagen
+        val requestBodyBuilder = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("chat_id", config.chatId)
+            .addFormDataPart(
+                "photo",
+                "capture.jpg",
+                imageData.toRequestBody("image/jpeg".toMediaTypeOrNull())
+            )
+
+        // Añadir caption si existe
+        if (!caption.isNullOrBlank()) {
+            requestBodyBuilder.addFormDataPart("caption", caption)
+        }
+
+        val requestBody = requestBodyBuilder.build()
+
+        val request = Request.Builder()
+            .url(url)
+            .post(requestBody)
+            .build()
+
+        return@withContext executeRequest(request)
+    }
+
+    /**
+     * Envía un mensaje con imagen en una sola operación.
+     * Útil para alertas completas.
+     *
+     * @param message Texto del mensaje (se envía primero)
+     * @param imageData Bytes de la imagen
+     * @param imageCaption Caption opcional para la imagen
+     * @return Resultado de la operación combinado
+     */
+    suspend fun sendMessageWithImage(
+        message: String,
+        imageData: ByteArray,
+        imageCaption: String? = null
+    ): TelegramResult = withContext(Dispatchers.IO) {
+        // Primero enviar el mensaje
+        val messageResult = sendMessage(message)
+        
+        // Si el mensaje falló, retornar el error
+        if (messageResult is TelegramResult.Error) {
+            return@withContext messageResult
+        }
+        
+        // Luego enviar la imagen
+        return@withContext sendImage(imageData, imageCaption)
     }
 
     /**
@@ -128,7 +178,7 @@ class TelegramService(private val config: TelegramConfig) {
     private fun handleResponse(response: Response): TelegramResult {
         return if (response.isSuccessful) {
             val responseBody = response.body?.string() ?: "Sin respuesta"
-            TelegramResult.Success("Mensaje enviado correctamente")
+            TelegramResult.Success("Enviado correctamente")
         } else {
             val errorBody = response.body?.string() ?: "Error desconocido"
             TelegramResult.Error(

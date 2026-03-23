@@ -2,7 +2,7 @@
  * Archivo: app/src/main/java/com/vigia/app/MainActivity.kt
  * Propósito: Activity principal de VIGIA1, punto de entrada de la aplicación.
  * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara, modo de selección de ROI,
- * configuración de Telegram y mostrar estado de detección.
+ * configuración de Telegram, captura de imagen y mostrar estado de detección.
  * Alcance: Capa de presentación, pantalla principal de la app.
  *
  * Decisiones técnicas relevantes:
@@ -13,6 +13,7 @@
  * - Preview de cámara real usando CameraX con análisis de frames
  * - Modo de selección de ROI con superposición táctil
  * - Configuración de Telegram funcional con prueba manual
+ * - Captura y envío manual de imagen a Telegram
  * - Visualización de estado de detección en tiempo real basado en frames reales
  *
  * Limitaciones temporales del MVP:
@@ -21,9 +22,9 @@
  * - Lógica de detección provisional basada en luminancia simple
  *
  * Cambios recientes:
- * - Añadida configuración funcional de Telegram con persistencia
- * - Implementada prueba manual de envío con feedback visual
- * - Estados de éxito/error visibles en UI para Telegram
+ * - Añadida captura y envío manual de imagen a Telegram
+ * - UI de captura con feedback visual del proceso
+ * - Separación clara entre captura de imagen y envío
  */
 package com.vigia.app
 
@@ -47,10 +48,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vigia.app.camera.CameraPreview
+import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.data.local.DataStoreRoiRepository
 import com.vigia.app.data.local.DataStoreTelegramConfigRepository
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
+import com.vigia.app.ui.ImageCaptureState
 import com.vigia.app.ui.MainViewModel
 import com.vigia.app.ui.ScreenMode
 import com.vigia.app.ui.TelegramTestState
@@ -65,7 +68,6 @@ import kotlinx.coroutines.flow.StateFlow
 class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: MainViewModel
-    private var frameDataFlow: StateFlow<FrameData?>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,12 +87,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     VigiaApp(
                         viewModel = viewModel,
-                        onRequestPermission = { requestCameraPermission() },
-                        onCameraPreviewCreated = { frameFlow ->
-                            // Conectar el flujo de frames de la cámara al monitoring
-                            frameDataFlow = frameFlow
-                            viewModel.connectCameraFrames(frameFlow)
-                        }
+                        onRequestPermission = { requestCameraPermission() }
                     )
                 }
             }
@@ -121,13 +118,11 @@ class MainActivity : ComponentActivity() {
  *
  * @param viewModel ViewModel para gestión de estado
  * @param onRequestPermission Callback para solicitar permiso de cámara
- * @param onCameraPreviewCreated Callback cuando el preview de cámara está listo con su flujo de frames
  */
 @Composable
 fun VigiaApp(
     viewModel: MainViewModel,
-    onRequestPermission: () -> Unit,
-    onCameraPreviewCreated: (StateFlow<FrameData?>) -> Unit
+    onRequestPermission: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -157,7 +152,9 @@ fun VigiaApp(
             onRequestPermission = onRequestPermission,
             onRoiSelected = { roi -> viewModel.confirmRoiSelection(roi) },
             onRoiSelectionCancelled = { viewModel.cancelRoiSelection() },
-            onCameraPreviewCreated = onCameraPreviewCreated,
+            onCameraReady = { frameFlow, processor ->
+                viewModel.connectCamera(frameFlow, processor)
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(400.dp)
@@ -174,6 +171,15 @@ fun VigiaApp(
                     onStopMonitoring = { viewModel.stopMonitoring() },
                     onDefineRoi = { viewModel.enterRoiSelectionMode() },
                     modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                // Sección de captura y envío de imagen
+                ImageCaptureSection(
+                    captureState = uiState.imageCaptureState,
+                    hasTelegramConfig = uiState.telegramConfig?.isValid() == true,
+                    onCaptureAndSend = { viewModel.captureAndSendImage() },
+                    onClearState = { viewModel.clearImageCaptureState() },
+                    modifier = Modifier.padding(bottom = 12.dp)
                 )
 
                 // Sección de configuración de Telegram
@@ -220,7 +226,7 @@ fun CameraArea(
     onRequestPermission: () -> Unit,
     onRoiSelected: (com.vigia.app.domain.model.Roi) -> Unit,
     onRoiSelectionCancelled: () -> Unit,
-    onCameraPreviewCreated: (StateFlow<FrameData?>) -> Unit,
+    onCameraReady: (StateFlow<FrameData?>, FrameProcessor) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (!hasPermission) {
@@ -253,15 +259,11 @@ fun CameraArea(
     // Contenedor de la cámara con posible overlay
     Box(modifier = modifier) {
         // Preview de cámara real con análisis de frames
-        val frameFlow = CameraPreview(
+        CameraPreview(
             modifier = Modifier.fillMaxSize(),
+            onCameraReady = onCameraReady,
             onError = { /* Manejar error en fase posterior */ }
         )
-
-        // Notificar al padre sobre el flujo de frames
-        LaunchedEffect(frameFlow) {
-            onCameraPreviewCreated(frameFlow)
-        }
 
         when (screenMode) {
             ScreenMode.ROI_SELECTION -> {
@@ -280,6 +282,115 @@ fun CameraArea(
                         isActive = isMonitoring,
                         modifier = Modifier.fillMaxSize()
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Sección de captura y envío de imagen a Telegram.
+ */
+@Composable
+fun ImageCaptureSection(
+    captureState: ImageCaptureState,
+    hasTelegramConfig: Boolean,
+    onCaptureAndSend: () -> Unit,
+    onClearState: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Limpiar estado cuando se vuelve a mostrar la sección
+    LaunchedEffect(Unit) {
+        if (captureState !is ImageCaptureState.Idle) {
+            onClearState()
+        }
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = when (captureState) {
+                is ImageCaptureState.Success -> Color(0xFFE8F5E9)
+                is ImageCaptureState.Error -> Color(0xFFFFEBEE)
+                else -> MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Captura de imagen",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            Button(
+                onClick = onCaptureAndSend,
+                enabled = hasTelegramConfig && 
+                    captureState !is ImageCaptureState.Capturing && 
+                    captureState !is ImageCaptureState.Sending,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                when (captureState) {
+                    is ImageCaptureState.Capturing -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Text("Capturando...")
+                        }
+                    }
+                    is ImageCaptureState.Sending -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Text("Enviando...")
+                        }
+                    }
+                    else -> Text("📸 Capturar y enviar imagen")
+                }
+            }
+
+            // Mensaje de estado
+            when (captureState) {
+                is ImageCaptureState.Success -> {
+                    Text(
+                        text = "✓ ${captureState.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF2E7D32),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                is ImageCaptureState.Error -> {
+                    Text(
+                        text = "✗ ${captureState.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFC62828),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                else -> {
+                    if (!hasTelegramConfig) {
+                        Text(
+                            text = "Configura Telegram primero para enviar imágenes",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
                 }
             }
         }

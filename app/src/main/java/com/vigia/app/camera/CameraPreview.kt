@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/camera/CameraPreview.kt
  * Propósito: Composable que muestra el preview de la cámara y configura el análisis de frames.
- * Responsabilidad principal: Renderizar la vista previa y proporcionar frames para análisis.
+ * Responsabilidad principal: Renderizar la vista previa y proporcionar frames para análisis y captura.
  * Alcance: Capa de cámara, integración de CameraX con Jetpack Compose.
  *
  * Decisiones técnicas relevantes:
@@ -9,7 +9,7 @@
  * - ImageAnalysis use case para procesamiento de frames en tiempo real
  * - AndroidView de Compose para integrar vista tradicional Android
  * - Lifecycle-aware para vincular cámara al ciclo de vida del Composable
- * - FrameProcessor como analyzer para extraer luminancia
+ * - FrameProcessor como analyzer para extraer luminancia y capturar imágenes
  *
  * Limitaciones temporales del MVP:
  * - Cámara trasera fija, sin selector de cámara
@@ -18,8 +18,8 @@
  *
  * Cambios recientes:
  * - Añadido ImageAnalysis use case para procesamiento de frames
- * - Integración con FrameProcessor para extraer luminancia
- * - Callback onFrameData para entregar frames al sistema de detección
+ * - Integración con FrameProcessor para extraer luminancia y capturar imágenes
+ * - Retorno de FrameProcessor para acceso a captura de imagen
  */
 package com.vigia.app.camera
 
@@ -46,16 +46,15 @@ import kotlinx.coroutines.flow.StateFlow
  * Composable que muestra el preview de la cámara y proporciona frames para análisis.
  *
  * @param modifier Modificador para el layout
- * @param onFrameData Callback opcional para recibir FrameData del procesador (no usado directamente, usar frameData Flow)
+ * @param onCameraReady Callback cuando la cámara está lista con el FrameProcessor
  * @param onError Callback para errores de inicialización de cámara
- * @return StateFlow<FrameData?> que emite los frames procesados (null si no hay frame)
  */
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
-    onFrameData: ((FrameData) -> Unit)? = null,
+    onCameraReady: ((StateFlow<FrameData?>, FrameProcessor) -> Unit)? = null,
     onError: (Throwable) -> Unit = {}
-): StateFlow<FrameData?> {
+) {
     val lifecycleOwner = LocalLifecycleOwner.current
     
     // Crear y recordar el procesador de frames
@@ -76,14 +75,13 @@ fun CameraPreview(
         }
     )
 
-    // Efecto de limpieza al desmontar
-    DisposableEffect(Unit) {
+    // Notificar que la cámara está lista con el processor
+    DisposableEffect(frameProcessor) {
+        onCameraReady?.invoke(frameProcessor.frameData, frameProcessor)
         onDispose {
             // La cámara se desvincula automáticamente por el lifecycle
         }
     }
-
-    return frameProcessor.frameData
 }
 
 /**

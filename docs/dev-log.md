@@ -285,4 +285,45 @@ Hacer funcional la configuración de Telegram con guardado local y prueba manual
 - sin validación de formato de token ni chat_id
 
 ### Próximo paso recomendado
-Implementar envío automático de alerta a Telegram cuando se detecte cambio, incluyendo captura de imagen.
+Implementar captura y envío manual de imagen a Telegram.
+
+---
+
+## Entrada 009 - Captura y envío manual de imagen
+
+### Fecha
+2026-03-23
+
+### Objetivo
+Implementar captura real de imagen desde cámara y envío manual a Telegram.
+
+### Qué se hizo
+- FrameProcessor modificado para almacenar último frame YUV completo
+- métodos getLastFrameBitmap() y getLastFrameJpegBytes() para captura
+- conversión YUV → NV21 → JPEG sin librerías externas
+- TelegramService implementa sendImage() con multipart/form-data
+- ImageCaptureState para estados de captura (Capturing, Sending, Success, Error)
+- UI de captura con botón "📸 Capturar y enviar imagen"
+- feedback visual durante captura y envío (spinners)
+- mensajes de éxito/error en UI
+- CameraPreview expone FrameProcessor para acceso a captura
+
+### Archivos/áreas relevantes
+- camera/FrameProcessor.kt (modificado - almacenamiento y captura de frames)
+- telegram/TelegramService.kt (modificado - sendImage con multipart)
+- ui/MainViewModel.kt (modificado - captureAndSendImage, ImageCaptureState)
+- camera/CameraPreview.kt (modificado - onCameraReady con FrameProcessor)
+- MainActivity.kt (modificado - ImageCaptureSection UI)
+- docs/project-status.md (actualizado)
+- docs/code-map.md (actualizado)
+- docs/dev-log.md (esta entrada)
+
+### Limitaciones temporales
+- captura usa último frame disponible, no frame exclusivo del momento exacto
+- sin compresión avanzada de imágenes
+- resolución de captura es la de análisis (típicamente 640x480 o menor)
+- sin manejo de rotación de imagen
+- proceso manual (no automático al detectar cambio)
+
+### Próximo paso recomendado
+Implementar envío automático de alerta cuando se detecte cambio: mensaje "Minda Requiere Atención" + imagen automática + segunda captura a los 3 minutos.

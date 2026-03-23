@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/ui/MainViewModel.kt
  * Propósito: ViewModel para la pantalla principal de VIGIA1.
- * Responsabilidad principal: Gestionar estado de UI, selección de ROI, configuración Telegram y coordinar acciones del usuario.
+ * Responsabilidad principal: Gestionar estado de UI, selección de ROI, configuración Telegram, captura de imagen y coordinar acciones del usuario.
  * Alcance: Capa de presentación, lógica de la pantalla principal.
  *
  * Decisiones técnicas relevantes:
@@ -12,6 +12,7 @@
  * - Persistencia de ROI y TelegramConfig mediante repositorios (DataStore)
  * - Observación de resultados de detección para mostrar en UI
  * - Conexión del flujo de frames de cámara al MonitoringManager
+ * - Referencia a FrameProcessor para captura de imagen bajo demanda
  *
  * Limitaciones temporales del MVP:
  * - Lógica de detección usa luminancia simple (FrameData real pero análisis básico)
@@ -21,12 +22,14 @@
  * Cambios recientes:
  * - Añadida gestión completa de configuración de Telegram (guardar, cargar, probar)
  * - Implementada prueba manual de envío con feedback de resultado
- * - Estados de UI para Telegram: loading, success, error
+ * - Añadida funcionalidad de captura y envío manual de imagen
+ * - Estados de UI para captura de imagen: loading, success, error
  */
 package com.vigia.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
 import com.vigia.app.domain.model.TelegramConfig
@@ -61,6 +64,17 @@ sealed class TelegramTestState {
 }
 
 /**
+ * Estado de la captura y envío de imagen.
+ */
+sealed class ImageCaptureState {
+    object Idle : ImageCaptureState()
+    object Capturing : ImageCaptureState()
+    object Sending : ImageCaptureState()
+    data class Success(val message: String) : ImageCaptureState()
+    data class Error(val message: String) : ImageCaptureState()
+}
+
+/**
  * Estado de la UI de la pantalla principal.
  *
  * @property screenMode Modo actual de la pantalla (normal o selección ROI)
@@ -71,6 +85,7 @@ sealed class TelegramTestState {
  * @property hasRoi Indica si hay un ROI guardado persistentemente
  * @property detectionResult Último resultado de detección (null si no hay análisis)
  * @property telegramTestState Estado de la prueba de Telegram
+ * @property imageCaptureState Estado de la captura y envío de imagen
  */
 data class MainUiState(
     val screenMode: ScreenMode = ScreenMode.NORMAL,
@@ -80,7 +95,8 @@ data class MainUiState(
     val currentRoi: Roi? = null,
     val hasRoi: Boolean = false,
     val detectionResult: DetectionResult? = null,
-    val telegramTestState: TelegramTestState = TelegramTestState.Idle
+    val telegramTestState: TelegramTestState = TelegramTestState.Idle,
+    val imageCaptureState: ImageCaptureState = ImageCaptureState.Idle
 )
 
 /**
@@ -98,6 +114,9 @@ class MainViewModel(
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
+    // Referencia al procesador de frames para captura de imagen
+    private var frameProcessor: FrameProcessor? = null
 
     init {
         loadSavedData()
@@ -133,8 +152,10 @@ class MainViewModel(
      * Debe llamarse cuando el CameraPreview esté inicializado.
      *
      * @param frameDataFlow StateFlow que emite frames procesados de CameraX
+     * @param processor FrameProcessor para captura de imagen
      */
-    fun connectCameraFrames(frameDataFlow: StateFlow<FrameData?>) {
+    fun connectCamera(frameDataFlow: StateFlow<FrameData?>, processor: FrameProcessor) {
+        this.frameProcessor = processor
         monitoringManager.connectCameraFrames(frameDataFlow)
     }
 
@@ -235,8 +256,7 @@ class MainViewModel(
     }
 
     /**
-     * Realiza una prueba manual de envío a Telegram.
-     * Envía un mensaje de prueba usando la configuración guardada.
+     * Realiza una prueba manual de envío de mensaje a Telegram.
      */
     fun testTelegramConnection() {
         val config = _uiState.value.telegramConfig
@@ -270,6 +290,64 @@ class MainViewModel(
      */
     fun clearTelegramTestState() {
         _uiState.update { it.copy(telegramTestState = TelegramTestState.Idle) }
+    }
+
+    /**
+     * Captura la imagen actual y la envía a Telegram de forma manual.
+     * Este método es llamado por acción manual del usuario.
+     */
+    fun captureAndSendImage() {
+        val config = _uiState.value.telegramConfig
+        
+        if (config == null || !config.isValid()) {
+            _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Error("Configuración de Telegram incompleta")) }
+            return
+        }
+
+        val processor = frameProcessor
+        if (processor == null) {
+            _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Error("Cámara no inicializada")) }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Capturing) }
+            
+            // Capturar imagen
+            val imageBytes = processor.getLastFrameJpegBytes()
+            
+            if (imageBytes == null) {
+                _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Error("No se pudo capturar la imagen")) }
+                return@launch
+            }
+
+            _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Sending) }
+            
+            // Enviar imagen a Telegram
+            val service = TelegramService(config)
+            val result = service.sendImage(
+                imageData = imageBytes,
+                caption = "📸 Captura manual desde VIGIA"
+            )
+            
+            _uiState.update { currentState ->
+                when (result) {
+                    is TelegramResult.Success -> {
+                        currentState.copy(imageCaptureState = ImageCaptureState.Success("Imagen enviada correctamente"))
+                    }
+                    is TelegramResult.Error -> {
+                        currentState.copy(imageCaptureState = ImageCaptureState.Error(result.message))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Limpia el estado de captura de imagen.
+     */
+    fun clearImageCaptureState() {
+        _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Idle) }
     }
 
     /**
