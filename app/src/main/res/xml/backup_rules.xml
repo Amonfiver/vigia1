@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Archivo: app/src/main/res/xml/backup_rules.xml
+  Propósito: Configurar reglas de backup para Android 11 y anteriores.
+  Responsabilidad principal: Definir qué datos deben incluirse/excluirse del backup.
+  Alcance: Configuración de backup para el MVP.
+
+  Decisiones técnicas relevantes:
+  - Incluir todas las preferencias en backup automático
+
+  Limitaciones temporales del MVP:
+  - Backup completo sin exclusiones específicas
+
+  Cambios recientes: Creación inicial.
+-->
+<full-backup-content>
+    <include domain="sharedpref" path="."/>
+</full-backup-content>

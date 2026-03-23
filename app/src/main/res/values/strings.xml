@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Archivo: app/src/main/res/values/strings.xml
+  Propósito: Definir cadenas de texto localizables de la aplicación VIGIA1.
+  Responsabilidad principal: Centralizar todos los textos visibles al usuario.
+  Alcance: Recursos de strings para el MVP.
+
+  Decisiones técnicas relevantes:
+  - Uso de strings.xml para facilitar futura localización
+  - Nombres descriptivos siguiendo convención Android
+
+  Limitaciones temporales del MVP:
+  - Solo idioma español/inglés básico, sin localización completa
+
+  Cambios recientes: Creación inicial con strings base.
+-->
+<resources>
+    <string name="app_name">VIGIA</string>
+    
+    <!-- Pantalla principal -->
+    <string name="title_vigia">VIGIA</string>
+    <string name="status_monitoring_stopped">Monitorización detenida</string>
+    <string name="status_monitoring_active">Monitorización activa</string>
+    <string name="button_start_monitoring">Iniciar vigilancia</string>
+    <string name="button_stop_monitoring">Detener vigilancia</string>
+    
+    <!-- Configuración Telegram -->
+    <string name="telegram_config_title">Configuración Telegram</string>
+    <string name="telegram_bot_token_hint">Bot Token</string>
+    <string name="telegram_chat_id_hint">Chat ID</string>
+    <string name="telegram_save_config">Guardar configuración</string>
+    <string name="telegram_test_message">Probar conexión</string>
+    
+    <!-- Mensajes de estado -->
+    <string name="message_monitoring_started">Vigilancia iniciada</string>
+    <string name="message_monitoring_stopped">Vigilancia detenida</string>
+    <string name="message_alert_sent">Alerta enviada</string>
+    
+    <!-- Placeholders -->
+    <string name="placeholder_not_configured">Sin configurar</string>
+</resources>

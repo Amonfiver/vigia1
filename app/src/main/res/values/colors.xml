@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Archivo: app/src/main/res/values/colors.xml
+  Propósito: Definir paleta de colores de la aplicación VIGIA1.
+  Responsabilidad principal: Centralizar definiciones de colores para consistencia visual.
+  Alcance: Recursos de colores para el MVP.
+
+  Decisiones técnicas relevantes:
+  - Esquema de colores Material3
+  - Colores semánticos para estados (éxito, error, alerta)
+
+  Limitaciones temporales del MVP:
+  - Paleta básica, sin temas dinámicos ni modo oscuro explícito todavía
+
+  Cambios recientes: Creación inicial con colores base.
+-->
+<resources>
+    <!-- Colores principales -->
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    
+    <!-- Colores básicos -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    
+    <!-- Colores semánticos -->
+    <color name="status_active">#FF4CAF50</color>
+    <color name="status_stopped">#FFF44336</color>
+    <color name="status_pending">#FFFF9800</color>
+</resources>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Archivo: app/src/main/res/values/themes.xml
+  Propósito: Definir tema visual de la aplicación VIGIA1.
+  Responsabilidad principal: Configurar apariencia base de la app usando Material3.
+  Alcance: Tema base para el MVP.
+
+  Decisiones técnicas relevantes:
+  - Uso de Material3 para diseño moderno y consistente
+  - Tema claro base con colores de marca
+
+  Limitaciones temporales del MVP:
+  - Solo tema claro, sin tema oscuro configurado explícitamente
+  - Sin estilos personalizados complejos
+
+  Cambios recientes: Creación inicial del tema.
+-->
+<resources>
+    <style name="Theme.Vigia1" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Colores primarios -->
+        <item name="android:colorPrimary">@color/purple_500</item>
+        <item name="android:colorPrimaryDark">@color/purple_700</item>
+        <item name="android:colorAccent">@color/teal_200</item>
+        
+        <!-- Fondo -->
+        <item name="android:windowBackground">@color/white</item>
+    </style>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Archivo: ic_launcher.xml
+  Propósito: Definición de icono adaptable del launcher para VIGIA1.
+  Responsabilidad principal: Referenciar capas de icono para API 26+.
+  Alcance: Icono del launcher.
+
+  Nota: Este es un placeholder. Reemplazar con icono real en fase de diseño.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/purple_500"/>
+    <foreground android:drawable="@color/white"/>
+</adaptive-icon>

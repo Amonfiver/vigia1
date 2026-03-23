@@ -1,11 +1,91 @@
-*.iml
-.gradle
-/local.properties
-/.idea
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# Archivo: .gitignore
+# Propósito: Definir archivos y carpetas ignorados por Git en VIGIA1.
+# Responsabilidad principal: Excluir archivos generados, de build y sensibles del control de versiones.
+# Alcance: Configuración global de exclusión para el proyecto.
+#
+# Decisiones técnicas relevantes:
+# - Exclusión de archivos de build de Gradle y Android
+# - Exclusión de configuraciones locales de IDE
+# - Exclusión de archivos sensibles (keystores, tokens)
+#
+# Limitaciones temporales del MVP:
+# - Configuración estándar de Android/Kotlin
+#
+# Cambios recientes: Creación inicial del archivo.
+
+# Gradle files
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Local configuration file (sdk path, etc)
 local.properties
-**/build/
+
+# Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+captures/
+output.json
+
+# IntelliJ
+*.iml
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/modules.xml
+.idea/navEditor.xml
+
+# Keystore files
+*.jks
+*.keystore
+
+# External native build folder generated in Android Studio 2.2 and later
+.externalNativeBuild
+.cxx/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+
+# Android Profiling
+*.hprof
+
+# Log files
+*.log
+
+# Test results
+test-results/
+tests/
+androidTest/
+test/
