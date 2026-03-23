@@ -10,7 +10,8 @@ El MVP actual busca:
 - permitir definir manualmente un ROI,
 - guardar ese ROI localmente,
 - analizar visualmente ese ROI con frames reales de cámara,
-- y más adelante enviar alertas por Telegram con captura y segunda confirmación a los 3 minutos.
+- **configurar y probar Telegram manualmente,**
+- y más adelante enviar alertas automáticas por Telegram con captura y segunda confirmación a los 3 minutos.
 
 ## Estado actual
 
@@ -27,9 +28,12 @@ El MVP actual busca:
 - recuperación automática del ROI al abrir la app
 - visualización del ROI sobre la cámara
 - capa de detección separada por módulos
-- **frames reales de CameraX conectados al detector**
+- frames reales de CameraX conectados al detector
 - análisis de luminancia real del ROI
 - estado visual en UI del resultado de detección
+- **configuración funcional de Telegram (bot token + chat_id)**
+- **persistencia de configuración Telegram**
+- **prueba manual de envío a Telegram con feedback visual**
 
 ### Implementado de forma provisional
 - detector básico desacoplado (interfaz RoiDetector)
@@ -37,10 +41,11 @@ El MVP actual busca:
 - conversión YUV a luminancia sin optimizaciones avanzadas
 - análisis a 320x240 para rendimiento (downscaling)
 - sin compensación de iluminación ni normalización avanzada
+- **prueba de Telegram es manual (no automática al detectar cambio)**
 
 ### Aún NO implementado o pendiente
 - sensibilidad afinada / reducción de falsos positivos
-- configuración real y prueba de Telegram
+- **envío automático a Telegram al detectar cambio**
 - captura real para alertas
 - envío de alerta con mensaje e imagen
 - segunda captura 3 minutos después
@@ -50,13 +55,13 @@ El MVP actual busca:
 
 ## Fase actual del MVP
 
-Fase actual: análisis visual real del ROI con frames de cámara funcionando.
+Fase actual: configuración y prueba funcional de Telegram completada.
 
-La detección ya no usa datos simulados. Ahora procesa luminancia real del ROI usando CameraX ImageAnalysis.
+La app puede detectar cambios en el ROI usando frames reales de cámara, y el usuario puede configurar y probar manualmente el envío a Telegram.
 
 ## Siguiente objetivo recomendado
 
-Implementar la configuración y prueba de Telegram, seguido de la captura y envío de alertas cuando se detecte un cambio.
+Implementar el envío automático de alertas a Telegram cuando el detector identifique un cambio significativo, incluyendo captura de imagen del momento.
 
 ## Decisiones clave vigentes
 
@@ -65,15 +70,17 @@ Implementar la configuración y prueba de Telegram, seguido de la captura y env�
 - El ROI puede dibujarse y reposicionarse antes de confirmar.
 - El ROI se guarda localmente y se recupera en futuras sesiones.
 - El análisis usa frames reales de CameraX (ImageAnalysis).
+- Telegram se configura manualmente y se prueba antes de usar.
 - La arquitectura debe mantenerse modular y simple.
 - Cada iteración debe ser pequeña, compilable y documentada.
 
 ## Riesgos y puntos de atención
 
 - falsos positivos por iluminación o movimiento de cámara (mitigado parcialmente con ROI manual)
+- dependencia de conexión a internet para Telegram
+- tokens de bot expuestos en preferencias locales (sin cifrado en MVP)
 - sobrecargar demasiado pronto la arquitectura
 - mezclar detección, UI y cámara en una sola capa (controlado por separación actual)
-- consumo de batería por análisis continuo de frames
 
 ## Recordatorio de disciplina SDD
 

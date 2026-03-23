@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/ui/MainViewModel.kt
  * Propósito: ViewModel para la pantalla principal de VIGIA1.
- * Responsabilidad principal: Gestionar estado de UI, selección de ROI, persistencia y coordinar acciones del usuario.
+ * Responsabilidad principal: Gestionar estado de UI, selección de ROI, configuración Telegram y coordinar acciones del usuario.
  * Alcance: Capa de presentación, lógica de la pantalla principal.
  *
  * Decisiones técnicas relevantes:
@@ -9,17 +9,19 @@
  * - ViewModel de androidx.lifecycle para sobrevivir a cambios de configuración
  * - Inyección de dependencias mediante constructor para testabilidad
  * - Uso de MonitoringManager para gestión del estado de vigilancia y análisis
- * - Persistencia de ROI mediante RoiRepository (DataStore)
+ * - Persistencia de ROI y TelegramConfig mediante repositorios (DataStore)
  * - Observación de resultados de detección para mostrar en UI
  * - Conexión del flujo de frames de cámara al MonitoringManager
  *
  * Limitaciones temporales del MVP:
- * - Lógica de detección usa luminancia simple ( FrameData real pero análisis básico)
+ * - Lógica de detección usa luminancia simple (FrameData real pero análisis básico)
  * - Sin manejo avanzado de errores de red
+ * - Prueba de Telegram es manual (no automática al detectar cambio)
  *
  * Cambios recientes:
- * - Añadido método connectCameraFrames para vincular frames reales de CameraX
- * - Análisis ahora usa datos reales de luminancia en lugar de simulación
+ * - Añadida gestión completa de configuración de Telegram (guardar, cargar, probar)
+ * - Implementada prueba manual de envío con feedback de resultado
+ * - Estados de UI para Telegram: loading, success, error
  */
 package com.vigia.app.ui
 
@@ -27,11 +29,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
-import com.vigia.app.domain.model.Roi
 import com.vigia.app.domain.model.TelegramConfig
+import com.vigia.app.domain.model.Roi
 import com.vigia.app.domain.repository.RoiRepository
 import com.vigia.app.domain.repository.TelegramConfigRepository
 import com.vigia.app.monitoring.MonitoringManager
+import com.vigia.app.telegram.TelegramResult
+import com.vigia.app.telegram.TelegramService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +51,16 @@ enum class ScreenMode {
 }
 
 /**
+ * Estado de la prueba de Telegram.
+ */
+sealed class TelegramTestState {
+    object Idle : TelegramTestState()
+    object Loading : TelegramTestState()
+    data class Success(val message: String) : TelegramTestState()
+    data class Error(val message: String) : TelegramTestState()
+}
+
+/**
  * Estado de la UI de la pantalla principal.
  *
  * @property screenMode Modo actual de la pantalla (normal o selección ROI)
@@ -56,6 +70,7 @@ enum class ScreenMode {
  * @property currentRoi ROI actualmente seleccionado (persistido o temporal)
  * @property hasRoi Indica si hay un ROI guardado persistentemente
  * @property detectionResult Último resultado de detección (null si no hay análisis)
+ * @property telegramTestState Estado de la prueba de Telegram
  */
 data class MainUiState(
     val screenMode: ScreenMode = ScreenMode.NORMAL,
@@ -64,7 +79,8 @@ data class MainUiState(
     val telegramConfig: TelegramConfig? = null,
     val currentRoi: Roi? = null,
     val hasRoi: Boolean = false,
-    val detectionResult: DetectionResult? = null
+    val detectionResult: DetectionResult? = null,
+    val telegramTestState: TelegramTestState = TelegramTestState.Idle
 )
 
 /**
@@ -213,8 +229,47 @@ class MainViewModel(
                 _uiState.update { it.copy(telegramConfig = config) }
             } catch (e: IllegalArgumentException) {
                 // Datos inválidos, no guardar
+                _uiState.update { it.copy(telegramTestState = TelegramTestState.Error("Datos inválidos")) }
             }
         }
+    }
+
+    /**
+     * Realiza una prueba manual de envío a Telegram.
+     * Envía un mensaje de prueba usando la configuración guardada.
+     */
+    fun testTelegramConnection() {
+        val config = _uiState.value.telegramConfig
+        
+        if (config == null || !config.isValid()) {
+            _uiState.update { it.copy(telegramTestState = TelegramTestState.Error("Configuración incompleta")) }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(telegramTestState = TelegramTestState.Loading) }
+            
+            val service = TelegramService(config)
+            val result = service.sendMessage("🧪 <b>Prueba de VIGIA</b>\n\nConexión configurada correctamente.\n\nSi recibes este mensaje, el bot está funcionando.")
+            
+            _uiState.update { currentState ->
+                when (result) {
+                    is TelegramResult.Success -> {
+                        currentState.copy(telegramTestState = TelegramTestState.Success(result.message))
+                    }
+                    is TelegramResult.Error -> {
+                        currentState.copy(telegramTestState = TelegramTestState.Error(result.message))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Limpia el estado de la prueba de Telegram.
+     */
+    fun clearTelegramTestState() {
+        _uiState.update { it.copy(telegramTestState = TelegramTestState.Idle) }
     }
 
     /**
@@ -232,7 +287,7 @@ class MainViewModel(
      * @return true si hay configuración válida
      */
     fun hasTelegramConfig(): Boolean {
-        return _uiState.value.telegramConfig != null
+        return _uiState.value.telegramConfig?.isValid() ?: false
     }
 
     override fun onCleared() {

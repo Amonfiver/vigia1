@@ -30,10 +30,10 @@ app/src/main/java/com/vigia/app/
 │       └── TelegramConfigRepository.kt # Interfaz persistencia Telegram
 ├── monitoring/                        # Coordinación vigilancia
 │   └── MonitoringManager.kt           # Estado vigilancia + análisis periódico
-├── telegram/                          # Envío de alertas (placeholder)
-│   └── TelegramService.kt             # Servicio Telegram (pendiente implementar)
+├── telegram/                          # Envío de alertas
+│   └── TelegramService.kt             # Servicio Telegram con OkHttp real
 ├── ui/                                # Interfaz de usuario
-│   ├── MainViewModel.kt               # ViewModel principal
+│   ├── MainViewModel.kt               # ViewModel principal (gestión estado)
 │   └── components/
 │       ├── RoiOverlay.kt              # Dibuja ROI sobre cámara
 │       └── RoiSelector.kt             # Selector táctil de ROI
@@ -51,6 +51,14 @@ CameraX → FrameProcessor → FrameData → MonitoringManager
 RoiDetector.analyze(frameData, roi) → DetectionResult
                                               ↓
                                        MainViewModel → UI
+```
+
+Para Telegram (flujo manual de prueba):
+
+```
+UI → MainViewModel → TelegramService → OkHttp → Telegram Bot API
+                         ↓
+                   TelegramResult → UI (estado éxito/error)
 ```
 
 ---
@@ -89,6 +97,24 @@ RoiDetector.analyze(frameData, roi) → DetectionResult
 - **Estado**: PROVISIONAL - debe reemplazarse por análisis más robusto
 - **Cuándo tocar**: Nunca mejorarlo, reemplazar por nueva implementación de RoiDetector
 
+### TelegramService (telegram/TelegramService.kt)
+- **Qué hace**: Envía mensajes e imágenes vía Telegram Bot API
+- **Dependencia**: OkHttp para HTTP
+- **Métodos principales**: `sendMessage()`, `sendImage()` (pendiente)
+- **Retorna**: `TelegramResult` (Success o Error)
+- **Configuración**: Requiere TelegramConfig válido
+- **Cuándo tocar**: Añadir envío de imágenes, reintentos, cola de mensajes
+
+### MainViewModel (ui/MainViewModel.kt)
+- **Qué hace**: Gestiona todo el estado de la UI y coordina acciones
+- **Gestiona**: ROI, Telegram, Monitorización, Detección
+- **Estados**: MainUiState con ScreenMode, TelegramTestState, DetectionResult
+- **Métodos clave**:
+  - `connectCameraFrames()` - vincula cámara
+  - `saveTelegramConfig()` - guarda config Telegram
+  - `testTelegramConnection()` - prueba manual de envío
+  - `startMonitoring()` / `stopMonitoring()` - control vigilancia
+
 ---
 
 ## Puntos de extensión recomendados
@@ -96,20 +122,24 @@ RoiDetector.analyze(frameData, roi) → DetectionResult
 ### Para mejorar detección
 Crear nueva clase implementando `RoiDetector`, inyectar en `MonitoringManager`.
 
-### Para capturar imagen de alerta
-Ampliar `FrameProcessor` o `MonitoringManager` para guardar último FrameData como imagen.
+### Para envío automático de alertas
+En `MainViewModel`, observar `detectionResult` y cuando `hasChange == true`, llamar a `TelegramService.sendMessage()` y/o `sendImage()`.
 
-### Para enviar Telegram
-Implementar métodos en `TelegramService`, llamar desde `MainViewModel` cuando `detectionResult.hasChange`.
+### Para capturar imagen de alerta
+Ampliar `FrameProcessor` o `MonitoringManager` para guardar último FrameData como imagen cuando se detecte cambio.
 
 ### Para múltiples ROIs
 Cambiar `currentRoi: Roi?` por `List<Roi>` en `MonitoringManager` y adaptar UI.
+
+### Para reintentos de Telegram
+Ampliar `TelegramService` con cola de mensajes pendientes y lógica de reintento.
 
 ---
 
 ## Archivos a NO tocar sin razón fuerte
 
 - `domain/model/Roi.kt`: Modelo estable, cambios rompen persistencia
+- `domain/model/TelegramConfig.kt`: Modelo estable, cambios rompen persistencia
 - `domain/repository/*`: Contratos de persistencia, afectan DataStore
 - `data/local/*`: Implementación de persistencia, migraciones complejas
 
@@ -120,6 +150,7 @@ Cambiar `currentRoi: Roi?` por `List<Roi>` en `MonitoringManager` y adaptar UI.
 - **CameraX**: Preview, ImageAnalysis (androidx.camera)
 - **Compose**: UI (androidx.compose)
 - **DataStore**: Persistencia (androidx.datastore)
+- **OkHttp**: HTTP para Telegram (com.squareup.okhttp3)
 - **Kotlin Coroutines**: Flujos asíncronos (kotlinx.coroutines)
 
 ---
@@ -127,6 +158,7 @@ Cambiar `currentRoi: Roi?` por `List<Roi>` en `MonitoringManager` y adaptar UI.
 ## Notas de arquitectura
 
 - **Separación por capas**: UI → Monitoring → Detection → Camera
+- **UI → Telegram**: Directo vía ViewModel para pruebas manuales
 - **Inyección de dependencias**: Constructor-based, fácil de testear
 - **Estado reactivo**: StateFlow en todos los niveles
 - **Lifecycle-aware**: Camera vinculado a lifecycle de Compose/Activity

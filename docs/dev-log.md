@@ -244,4 +244,45 @@ Sustituir la simulación de datos por frames reales de cámara en el análisis d
 - sin detección de movimiento ni análisis de textura
 
 ### Próximo paso recomendado
-Implementar configuración y prueba de Telegram, seguido de captura y envío de alertas cuando se detecte cambio real.
+Implementar configuración y prueba funcional de Telegram.
+
+---
+
+## Entrada 008 - Configuración y prueba de Telegram
+
+### Fecha
+2026-03-23
+
+### Objetivo
+Hacer funcional la configuración de Telegram con guardado local y prueba manual real.
+
+### Qué se hizo
+- implementación real de TelegramService con OkHttp
+- envío de mensajes de texto a Telegram Bot API
+- manejo de errores de red y respuestas HTTP
+- estado TelegramTestState para feedback visual (Idle, Loading, Success, Error)
+- UI de configuración con campos Bot Token y Chat ID
+- botón "Guardar" que persiste en DataStore
+- botón "Probar" que envía mensaje de prueba real
+- indicadores visuales de éxito (✓) o error (✗)
+- recuperación automática de configuración al abrir la app
+- validación de campos vacíos antes de guardar/probar
+
+### Archivos/áreas relevantes
+- telegram/TelegramService.kt (modificado - implementación real con OkHttp)
+- ui/MainViewModel.kt (modificado - gestión config y prueba Telegram)
+- MainActivity.kt (modificado - UI config Telegram funcional)
+- DataStoreTelegramConfigRepository.kt (ya existente, sin cambios)
+- docs/project-status.md (actualizado)
+- docs/code-map.md (actualizado)
+- docs/dev-log.md (esta entrada)
+
+### Limitaciones temporales
+- envío de imágenes pendiente (solo mensajes de texto)
+- sin reintentos automáticos ante fallos de red
+- tokens guardados en texto plano (sin cifrado)
+- prueba es manual (no automática al detectar cambio)
+- sin validación de formato de token ni chat_id
+
+### Próximo paso recomendado
+Implementar envío automático de alerta a Telegram cuando se detecte cambio, incluyendo captura de imagen.

@@ -1,7 +1,8 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/MainActivity.kt
  * Propósito: Activity principal de VIGIA1, punto de entrada de la aplicación.
- * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara, modo de selección de ROI y mostrar estado de detección.
+ * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara, modo de selección de ROI,
+ * configuración de Telegram y mostrar estado de detección.
  * Alcance: Capa de presentación, pantalla principal de la app.
  *
  * Decisiones técnicas relevantes:
@@ -11,17 +12,18 @@
  * - Solicitud de permisos en tiempo de ejecución para cámara
  * - Preview de cámara real usando CameraX con análisis de frames
  * - Modo de selección de ROI con superposición táctil
+ * - Configuración de Telegram funcional con prueba manual
  * - Visualización de estado de detección en tiempo real basado en frames reales
  *
  * Limitaciones temporales del MVP:
- * - Sin implementación real de envío a Telegram
+ * - FrameData de análisis es procesado a 320x240 para rendimiento
+ * - Sin implementación automática de envío a Telegram al detectar cambio
  * - Lógica de detección provisional basada en luminancia simple
- * - Sin compensación avanzada de iluminación
  *
  * Cambios recientes:
- * - Conexión de frames reales de CameraX al sistema de detección
- * - CameraPreview ahora retorna StateFlow<FrameData?> para análisis
- * - Eliminada simulación de datos en el detector
+ * - Añadida configuración funcional de Telegram con persistencia
+ * - Implementada prueba manual de envío con feedback visual
+ * - Estados de éxito/error visibles en UI para Telegram
  */
 package com.vigia.app
 
@@ -33,6 +35,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,6 +53,7 @@ import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
 import com.vigia.app.ui.MainViewModel
 import com.vigia.app.ui.ScreenMode
+import com.vigia.app.ui.TelegramTestState
 import com.vigia.app.ui.components.RoiOverlay
 import com.vigia.app.ui.components.RoiSelector
 import com.vigia.app.utils.PermissionsHelper
@@ -131,7 +136,8 @@ fun VigiaApp(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // Título VIGIA
@@ -154,7 +160,7 @@ fun VigiaApp(
             onCameraPreviewCreated = onCameraPreviewCreated,
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .height(400.dp)
         )
 
         // Controles inferiores según el modo
@@ -168,6 +174,16 @@ fun VigiaApp(
                     onStopMonitoring = { viewModel.stopMonitoring() },
                     onDefineRoi = { viewModel.enterRoiSelectionMode() },
                     modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                // Sección de configuración de Telegram
+                TelegramConfigSection(
+                    telegramConfig = uiState.telegramConfig,
+                    testState = uiState.telegramTestState,
+                    onSaveConfig = { botToken, chatId -> viewModel.saveTelegramConfig(botToken, chatId) },
+                    onTestConnection = { viewModel.testTelegramConnection() },
+                    onClearTestState = { viewModel.clearTelegramTestState() },
+                    modifier = Modifier.padding(bottom = 16.dp)
                 )
             }
             ScreenMode.ROI_SELECTION -> {
@@ -187,13 +203,6 @@ fun VigiaApp(
                     MaterialTheme.colorScheme.error
                 },
                 modifier = Modifier.padding(bottom = 12.dp)
-            )
-        }
-
-        // Sección de configuración de Telegram (solo en modo normal)
-        if (uiState.screenMode == ScreenMode.NORMAL) {
-            TelegramConfigSection(
-                modifier = Modifier.padding(bottom = 8.dp)
             )
         }
     }
@@ -425,12 +434,34 @@ fun DetectionStatusCard(
 }
 
 /**
- * Sección de configuración de Telegram (placeholder visual).
+ * Sección de configuración de Telegram funcional.
  */
 @Composable
-fun TelegramConfigSection(modifier: Modifier = Modifier) {
-    var botToken by remember { mutableStateOf("") }
-    var chatId by remember { mutableStateOf("") }
+fun TelegramConfigSection(
+    telegramConfig: com.vigia.app.domain.model.TelegramConfig?,
+    testState: TelegramTestState,
+    onSaveConfig: (String, String) -> Unit,
+    onTestConnection: () -> Unit,
+    onClearTestState: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var botToken by remember { mutableStateOf(telegramConfig?.botToken ?: "") }
+    var chatId by remember { mutableStateOf(telegramConfig?.chatId ?: "") }
+
+    // Actualizar campos cuando cambia la configuración guardada
+    LaunchedEffect(telegramConfig) {
+        telegramConfig?.let {
+            botToken = it.botToken
+            chatId = it.chatId
+        }
+    }
+
+    // Limpiar estado de prueba cuando se modifican los campos
+    LaunchedEffect(botToken, chatId) {
+        if (testState !is TelegramTestState.Idle) {
+            onClearTestState()
+        }
+    }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -444,7 +475,7 @@ fun TelegramConfigSection(modifier: Modifier = Modifier) {
             Text(
                 text = "Configuración Telegram",
                 style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 8.dp)
+                modifier = Modifier.padding(bottom = 12.dp)
             )
 
             OutlinedTextField(
@@ -467,12 +498,75 @@ fun TelegramConfigSection(modifier: Modifier = Modifier) {
                 singleLine = true
             )
 
-            Text(
-                text = "(Funcionalidad de guardado en desarrollo)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 8.dp)
-            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Botones de acción
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { onSaveConfig(botToken, chatId) },
+                    enabled = botToken.isNotBlank() && chatId.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Guardar")
+                }
+
+                Button(
+                    onClick = onTestConnection,
+                    enabled = botToken.isNotBlank() && chatId.isNotBlank() && testState !is TelegramTestState.Loading,
+                    modifier = Modifier.weight(1f),
+                    colors = if (testState is TelegramTestState.Success) {
+                        ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    }
+                ) {
+                    when (testState) {
+                        is TelegramTestState.Loading -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        }
+                        is TelegramTestState.Success -> Text("✓ Probar")
+                        else -> Text("Probar")
+                    }
+                }
+            }
+
+            // Estado de la prueba
+            when (testState) {
+                is TelegramTestState.Success -> {
+                    Text(
+                        text = "✓ ${testState.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF2E7D32),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                is TelegramTestState.Error -> {
+                    Text(
+                        text = "✗ ${testState.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFC62828),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                else -> {}
+            }
+
+            // Indicador de configuración guardada
+            if (telegramConfig?.isValid() == true && testState is TelegramTestState.Idle) {
+                Text(
+                    text = "✓ Configuración guardada",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
         }
     }
 }
