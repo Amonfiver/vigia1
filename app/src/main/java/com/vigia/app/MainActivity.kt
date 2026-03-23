@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/MainActivity.kt
  * Propósito: Activity principal de VIGIA1, punto de entrada de la aplicación.
- * Responsabilidad principal: Contener la UI principal y gestionar permisos de cámara.
+ * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara y modo de selección de ROI.
  * Alcance: Capa de presentación, pantalla principal de la app.
  *
  * Decisiones técnicas relevantes:
@@ -10,15 +10,17 @@
  * - ViewModel para gestión de estado
  * - Solicitud de permisos en tiempo de ejecución para cámara
  * - Preview de cámara real usando CameraX
+ * - Modo de selección de ROI con superposición táctil
  *
  * Limitaciones temporales del MVP:
  * - Sin implementación real de monitorización (solo estado visual)
- * - Placeholders para configuración de Telegram (campos visuales sin guardado)
+ * - Placeholders para configuración de Telegram (campos visuales sin guardado funcional)
+ * - ROI guardado solo en memoria (persistencia en siguiente iteración)
  *
  * Cambios recientes:
- * - Integración de CameraPreview real con CameraX
- * - Mejorada gestión de permisos con estado visual
- * - Añadida pantalla de permiso no concedido
+ * - Añadido modo de selección de ROI completo
+ * - Integración de RoiSelector y RoiOverlay
+ * - Botón para entrar en modo definición de ROI
  */
 package com.vigia.app
 
@@ -34,16 +36,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vigia.app.camera.CameraPreview
 import com.vigia.app.data.local.DataStoreRoiRepository
 import com.vigia.app.data.local.DataStoreTelegramConfigRepository
 import com.vigia.app.ui.MainViewModel
+import com.vigia.app.ui.ScreenMode
+import com.vigia.app.ui.components.RoiOverlay
+import com.vigia.app.ui.components.RoiSelector
 import com.vigia.app.utils.PermissionsHelper
 
 /**
@@ -94,7 +97,6 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         // El resultado se maneja en la UI mediante re-composición
-        // ya que PermissionsHelper.hasCameraPermission() se evalúa en cada recomposición
     }
 }
 
@@ -127,64 +129,76 @@ fun VigiaApp(
             modifier = Modifier.padding(top = 16.dp, bottom = 12.dp)
         )
 
-        // Área de preview de cámara o mensaje de permiso
-        CameraPreviewArea(
+        // Área de preview de cámara con ROI o selector
+        CameraArea(
             hasPermission = hasCameraPermission,
+            screenMode = uiState.screenMode,
+            currentRoi = uiState.currentRoi,
+            isMonitoring = uiState.isMonitoring,
             onRequestPermission = onRequestPermission,
+            onRoiSelected = { roi -> viewModel.confirmRoiSelection(roi) },
+            onRoiSelectionCancelled = { viewModel.cancelRoiSelection() },
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
         )
 
+        // Controles inferiores según el modo
+        when (uiState.screenMode) {
+            ScreenMode.NORMAL -> {
+                NormalModeControls(
+                    isMonitoring = uiState.isMonitoring,
+                    hasRoi = uiState.currentRoi != null,
+                    onStartMonitoring = { viewModel.startMonitoring() },
+                    onStopMonitoring = { viewModel.stopMonitoring() },
+                    onDefineRoi = { viewModel.enterRoiSelectionMode() },
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+            }
+            ScreenMode.ROI_SELECTION -> {
+                // En modo selección los controles están dentro del selector
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+
         // Texto de estado de monitorización
-        Text(
-            text = uiState.statusMessage,
-            fontSize = 18.sp,
-            color = if (uiState.isMonitoring) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.error
-            },
-            modifier = Modifier.padding(vertical = 12.dp)
-        )
+        if (uiState.screenMode == ScreenMode.NORMAL) {
+            Text(
+                text = uiState.statusMessage,
+                fontSize = 18.sp,
+                color = if (uiState.isMonitoring) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
 
-        // Botones de control
-        ControlButtons(
-            isMonitoring = uiState.isMonitoring,
-            onStartClick = { viewModel.startMonitoring() },
-            onStopClick = { viewModel.stopMonitoring() },
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
-
-        // Sección de configuración de Telegram (placeholder)
-        TelegramConfigSection(
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
+        // Sección de configuración de Telegram (solo en modo normal)
+        if (uiState.screenMode == ScreenMode.NORMAL) {
+            TelegramConfigSection(
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
     }
 }
 
 /**
- * Área que muestra la preview de cámara o un mensaje si no hay permiso.
- *
- * @param hasPermission Indica si el permiso de cámara está concedido
- * @param onRequestPermission Callback para solicitar permiso
- * @param modifier Modificador para el layout
+ * Área que muestra la preview de cámara, selector de ROI o overlay de ROI.
  */
 @Composable
-fun CameraPreviewArea(
+fun CameraArea(
     hasPermission: Boolean,
+    screenMode: ScreenMode,
+    currentRoi: com.vigia.app.domain.model.Roi?,
+    isMonitoring: Boolean,
     onRequestPermission: () -> Unit,
+    onRoiSelected: (com.vigia.app.domain.model.Roi) -> Unit,
+    onRoiSelectionCancelled: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (hasPermission) {
-        // Mostrar preview de cámara real
-        CameraPreview(
-            modifier = modifier,
-            onError = { error ->
-                // En fase posterior se manejará el error de forma más específica
-            }
-        )
-    } else {
+    if (!hasPermission) {
         // Mostrar mensaje solicitando permiso
         Box(
             modifier = modifier
@@ -208,54 +222,114 @@ fun CameraPreviewArea(
                 }
             }
         }
+        return
+    }
+
+    // Contenedor de la cámara con posible overlay
+    Box(modifier = modifier) {
+        // Preview de cámara real (siempre visible cuando hay permiso)
+        CameraPreview(
+            modifier = Modifier.fillMaxSize(),
+            onError = { /* Manejar error en fase posterior */ }
+        )
+
+        when (screenMode) {
+            ScreenMode.ROI_SELECTION -> {
+                // Modo selección: mostrar selector táctil
+                RoiSelector(
+                    onRoiSelected = onRoiSelected,
+                    onCancel = onRoiSelectionCancelled,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            ScreenMode.NORMAL -> {
+                // Modo normal: mostrar overlay del ROI si existe
+                if (currentRoi != null) {
+                    RoiOverlay(
+                        roi = currentRoi,
+                        isActive = isMonitoring,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
     }
 }
 
 /**
- * Botones de control de vigilancia.
- *
- * @param isMonitoring Indica si la vigilancia está activa
- * @param onStartClick Callback al pulsar iniciar
- * @param onStopClick Callback al pulsar detener
- * @param modifier Modificador para layout
+ * Controles del modo normal (vigilancia y definición de ROI).
  */
 @Composable
-fun ControlButtons(
+fun NormalModeControls(
     isMonitoring: Boolean,
-    onStartClick: () -> Unit,
-    onStopClick: () -> Unit,
+    hasRoi: Boolean,
+    onStartMonitoring: () -> Unit,
+    onStopMonitoring: () -> Unit,
+    onDefineRoi: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Button(
-            onClick = onStartClick,
-            enabled = !isMonitoring,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary
-            )
+        // Botones de vigilancia
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            Text("Iniciar vigilancia")
+            Button(
+                onClick = onStartMonitoring,
+                enabled = !isMonitoring,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Text("Iniciar vigilancia")
+            }
+
+            Button(
+                onClick = onStopMonitoring,
+                enabled = isMonitoring,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Text("Detener vigilancia")
+            }
         }
 
-        Button(
-            onClick = onStopClick,
-            enabled = isMonitoring,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error
-            )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Botón para definir/redefinir ROI
+        OutlinedButton(
+            onClick = onDefineRoi,
+            enabled = !isMonitoring,
+            modifier = Modifier.fillMaxWidth(0.8f)
         ) {
-            Text("Detener vigilancia")
+            Text(if (hasRoi) "Redefinir ROI" else "Definir ROI")
+        }
+
+        // Indicador de estado del ROI
+        if (hasRoi) {
+            Text(
+                text = "✓ ROI definido",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        } else {
+            Text(
+                text = "Sin ROI definido",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }
 
 /**
  * Sección de configuración de Telegram (placeholder visual).
- *
- * @param modifier Modificador para layout
  */
 @Composable
 fun TelegramConfigSection(modifier: Modifier = Modifier) {
@@ -277,7 +351,6 @@ fun TelegramConfigSection(modifier: Modifier = Modifier) {
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // Placeholder: campos de entrada para token y chat ID
             OutlinedTextField(
                 value = botToken,
                 onValueChange = { botToken = it },
@@ -298,7 +371,6 @@ fun TelegramConfigSection(modifier: Modifier = Modifier) {
                 singleLine = true
             )
 
-            // Nota: La funcionalidad de guardar se implementará en fase posterior
             Text(
                 text = "(Funcionalidad de guardado en desarrollo)",
                 style = MaterialTheme.typography.bodySmall,

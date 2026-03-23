@@ -1,7 +1,7 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/ui/MainViewModel.kt
  * Propósito: ViewModel para la pantalla principal de VIGIA1.
- * Responsabilidad principal: Gestionar estado de UI y coordinar acciones del usuario.
+ * Responsabilidad principal: Gestionar estado de UI, selección de ROI y coordinar acciones del usuario.
  * Alcance: Capa de presentación, lógica de la pantalla principal.
  *
  * Decisiones técnicas relevantes:
@@ -9,19 +9,22 @@
  * - ViewModel de androidx.lifecycle para sobrevivir a cambios de configuración
  * - Inyección de dependencias mediante constructor para testabilidad
  * - Uso de MonitoringManager para gestión del estado de vigilancia
+ * - Gestión de estado de selección de ROI (normal, seleccionando)
  *
  * Limitaciones temporales del MVP:
  * - Lógica de vigilancia simulada (no implementa detección real todavía)
+ * - Sin guardado persistente del ROI (solo en memoria temporal)
  * - Sin manejo avanzado de errores de red
  *
  * Cambios recientes:
+ * - Añadido estado y lógica para modo de selección de ROI
  * - Integración con MonitoringManager
- * - Mejorada separación de responsabilidades
  */
 package com.vigia.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vigia.app.domain.model.Roi
 import com.vigia.app.domain.model.TelegramConfig
 import com.vigia.app.domain.repository.RoiRepository
 import com.vigia.app.domain.repository.TelegramConfigRepository
@@ -33,17 +36,29 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
+ * Modo de la pantalla principal.
+ */
+enum class ScreenMode {
+    NORMAL,           // Vista normal con preview y controles
+    ROI_SELECTION     // Modo de selección de ROI
+}
+
+/**
  * Estado de la UI de la pantalla principal.
  *
+ * @property screenMode Modo actual de la pantalla (normal o selección ROI)
  * @property isMonitoring Indica si la vigilancia está activa
  * @property statusMessage Mensaje de estado mostrado al usuario
  * @property telegramConfig Configuración actual de Telegram (puede ser null)
- * @property hasRoi Indica si hay un ROI guardado
+ * @property currentRoi ROI actualmente seleccionado (temporal o guardado)
+ * @property hasRoi Indica si hay un ROI guardado persistentemente
  */
 data class MainUiState(
+    val screenMode: ScreenMode = ScreenMode.NORMAL,
     val isMonitoring: Boolean = false,
     val statusMessage: String = "Monitorización detenida",
     val telegramConfig: TelegramConfig? = null,
+    val currentRoi: Roi? = null,
     val hasRoi: Boolean = false
 )
 
@@ -89,15 +104,56 @@ class MainViewModel(
     private fun loadSavedData() {
         viewModelScope.launch {
             val hasRoi = roiRepository?.hasRoi() ?: false
+            val savedRoi = roiRepository?.getRoi()
             val telegramConfig = telegramConfigRepository?.getConfig()
 
             _uiState.update { currentState ->
                 currentState.copy(
                     hasRoi = hasRoi,
+                    currentRoi = savedRoi,
                     telegramConfig = telegramConfig
                 )
             }
         }
+    }
+
+    /**
+     * Entra en modo de selección de ROI.
+     */
+    fun enterRoiSelectionMode() {
+        _uiState.update { it.copy(screenMode = ScreenMode.ROI_SELECTION) }
+    }
+
+    /**
+     * Sale del modo de selección de ROI y vuelve a la vista normal.
+     */
+    fun exitRoiSelectionMode() {
+        _uiState.update { it.copy(screenMode = ScreenMode.NORMAL) }
+    }
+
+    /**
+     * Confirma un ROI seleccionado.
+     * En esta iteración solo actualiza el estado en memoria.
+     * El guardado persistente se implementará en la siguiente iteración.
+     *
+     * @param roi ROI seleccionado por el usuario
+     */
+    fun confirmRoiSelection(roi: Roi) {
+        _uiState.update { currentState ->
+            currentState.copy(
+                currentRoi = roi,
+                screenMode = ScreenMode.NORMAL
+            )
+        }
+        // TODO: Guardar persistentemente en la siguiente iteración
+        // viewModelScope.launch { roiRepository?.saveRoi(roi) }
+    }
+
+    /**
+     * Cancela la selección de ROI actual y vuelve a la vista normal.
+     */
+    fun cancelRoiSelection() {
+        _uiState.update { it.copy(screenMode = ScreenMode.NORMAL) }
     }
 
     /**
@@ -131,6 +187,15 @@ class MainViewModel(
                 // En fase posterior se mostrará error al usuario
             }
         }
+    }
+
+    /**
+     * Verifica si hay un ROI seleccionado actualmente.
+     *
+     * @return true si hay ROI seleccionado (temporal o guardado)
+     */
+    fun hasCurrentRoi(): Boolean {
+        return _uiState.value.currentRoi != null
     }
 
     /**
