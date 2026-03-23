@@ -13,22 +13,28 @@
  * - Observación de resultados de detección para mostrar en UI
  * - Conexión del flujo de frames de cámara al MonitoringManager
  * - Referencia a FrameProcessor para captura de imagen bajo demanda
+ * - AlertManager para alertas automáticas basadas en detección
  *
  * Limitaciones temporales del MVP:
  * - Lógica de detección usa luminancia simple (FrameData real pero análisis básico)
  * - Sin manejo avanzado de errores de red
- * - Prueba de Telegram es manual (no automática al detectar cambio)
+ * - Alerta automática implementada con cooldown de 60 segundos
+ * - Segunda captura a los 3 minutos NO implementada todavía
  *
  * Cambios recientes:
  * - Añadida gestión completa de configuración de Telegram (guardar, cargar, probar)
  * - Implementada prueba manual de envío con feedback de resultado
  * - Añadida funcionalidad de captura y envío manual de imagen
  * - Estados de UI para captura de imagen: loading, success, error
+ * - INTEGRACIÓN: AlertManager conectado para alertas automáticas al detectar cambios
+ * - Estado de alerta automática añadido a la UI
  */
 package com.vigia.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vigia.app.alert.AlertManager
+import com.vigia.app.alert.AlertState
 import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
@@ -86,6 +92,7 @@ sealed class ImageCaptureState {
  * @property detectionResult Último resultado de detección (null si no hay análisis)
  * @property telegramTestState Estado de la prueba de Telegram
  * @property imageCaptureState Estado de la captura y envío de imagen
+ * @property alertState Estado de la última alerta automática
  */
 data class MainUiState(
     val screenMode: ScreenMode = ScreenMode.NORMAL,
@@ -96,7 +103,8 @@ data class MainUiState(
     val hasRoi: Boolean = false,
     val detectionResult: DetectionResult? = null,
     val telegramTestState: TelegramTestState = TelegramTestState.Idle,
-    val imageCaptureState: ImageCaptureState = ImageCaptureState.Idle
+    val imageCaptureState: ImageCaptureState = ImageCaptureState.Idle,
+    val alertState: AlertState = AlertState.Idle
 )
 
 /**
@@ -105,11 +113,13 @@ data class MainUiState(
  * @param roiRepository Repositorio para persistencia de ROI
  * @param telegramConfigRepository Repositorio para configuración de Telegram
  * @param monitoringManager Gestor del estado de monitorización
+ * @param alertManager Gestor de alertas automáticas
  */
 class MainViewModel(
     private val roiRepository: RoiRepository? = null,
     private val telegramConfigRepository: TelegramConfigRepository? = null,
-    private val monitoringManager: MonitoringManager = MonitoringManager()
+    private val monitoringManager: MonitoringManager = MonitoringManager(),
+    private val alertManager: AlertManager = AlertManager()
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -137,11 +147,31 @@ class MainViewModel(
             }
         }
 
-        // Observar resultados de detección
+        // Observar resultados de detección y enviar a alertas automáticas
         viewModelScope.launch {
             monitoringManager.detectionResult.collect { result ->
                 _uiState.update { currentState ->
                     currentState.copy(detectionResult = result)
+                }
+                
+                // Si hay resultado válido y monitoring activo, procesar alerta
+                result?.let { detectionResult ->
+                    if (monitoringManager.isMonitoring.value) {
+                        alertManager.onDetectionResult(
+                            detectionResult = detectionResult,
+                            telegramConfig = _uiState.value.telegramConfig,
+                            frameProcessor = frameProcessor
+                        )
+                    }
+                }
+            }
+        }
+
+        // Observar estado de alertas automáticas
+        viewModelScope.launch {
+            alertManager.alertState.collect { alertState ->
+                _uiState.update { currentState ->
+                    currentState.copy(alertState = alertState)
                 }
             }
         }
@@ -368,8 +398,16 @@ class MainViewModel(
         return _uiState.value.telegramConfig?.isValid() ?: false
     }
 
+    /**
+     * Limpia el estado de la alerta automática.
+     */
+    fun clearAlertState() {
+        alertManager.clearState()
+    }
+
     override fun onCleared() {
         super.onCleared()
         monitoringManager.cleanup()
+        alertManager.cleanup()
     }
 }

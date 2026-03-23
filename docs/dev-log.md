@@ -327,3 +327,48 @@ Implementar captura real de imagen desde cámara y envío manual a Telegram.
 
 ### Próximo paso recomendado
 Implementar envío automático de alerta cuando se detecte cambio: mensaje "Minda Requiere Atención" + imagen automática + segunda captura a los 3 minutos.
+
+---
+
+## Entrada 010 - Alertas automáticas con Telegram
+
+### Fecha
+2026-03-23
+
+### Objetivo
+Conectar el detector con el flujo automático de alerta a Telegram cuando se detecte un cambio relevante.
+
+### Qué se hizo
+- creación de AlertManager en paquete alert/ para gestionar alertas automáticas
+- AlertState con estados: Idle, Sending, Success, Error, Cooldown
+- integración de AlertManager en MainViewModel como dependencia inyectada
+- observación de detectionResult desde MainViewModel para disparar alertas
+- envío automático cuando hasChange == true durante monitoring activo
+- mensaje automático: "🚨 <b>Minda Requiere Atención</b>" con texto explicativo
+- captura automática de imagen del momento del cambio
+- protección anti-spam: cooldown de 60 segundos entre alertas
+- feedback visual en UI del estado de alerta (enviando, éxito, error, cooldown)
+- método clearAlertState() para limpiar mensajes de la UI
+- limpieza de recursos en onCleared() del ViewModel
+- AutoAlertSection composable con diseño visual distintivo por estado
+- timestamps en mensajes de éxito/error para trazabilidad
+- actualización de cabeceras de documentación en archivos modificados
+
+### Archivos/áreas relevantes
+- alert/AlertManager.kt (nuevo - gestor de alertas automáticas)
+- ui/MainViewModel.kt (modificado - integración AlertManager y observación de alertas)
+- MainActivity.kt (modificado - AutoAlertSection UI y actualización de imports)
+- docs/project-status.md (actualizado)
+- docs/code-map.md (actualizado)
+- docs/dev-log.md (esta entrada)
+
+### Limitaciones temporales
+- cooldown fijo de 60 segundos (no configurable por UI)
+- sin cola de alertas pendientes (si falla, se pierde la alerta)
+- una sola alerta por evento (sin sistema de escalada)
+- sin persistencia de alertas enviadas
+- captura usa último frame disponible, no frame exclusivo del momento exacto
+- segunda captura a los 3 minutos NO implementada todavía (siguiente iteración)
+
+### Próximo paso recomendado
+Implementar segunda captura a los 3 minutos después de la primera alerta como confirmación del estado.

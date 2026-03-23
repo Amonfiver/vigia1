@@ -2,7 +2,7 @@
  * Archivo: app/src/main/java/com/vigia/app/MainActivity.kt
  * Propósito: Activity principal de VIGIA1, punto de entrada de la aplicación.
  * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara, modo de selección de ROI,
- * configuración de Telegram, captura de imagen y mostrar estado de detección.
+ * configuración de Telegram, captura de imagen, mostrar estado de detección y alertas automáticas.
  * Alcance: Capa de presentación, pantalla principal de la app.
  *
  * Decisiones técnicas relevantes:
@@ -15,16 +15,19 @@
  * - Configuración de Telegram funcional con prueba manual
  * - Captura y envío manual de imagen a Telegram
  * - Visualización de estado de detección en tiempo real basado en frames reales
+ * - Visualización de estado de alertas automáticas (éxito, error, cooldown)
  *
  * Limitaciones temporales del MVP:
  * - FrameData de análisis es procesado a 320x240 para rendimiento
- * - Sin implementación automática de envío a Telegram al detectar cambio
  * - Lógica de detección provisional basada en luminancia simple
+ * - Cooldown de alertas fijo a 60 segundos
+ * - Segunda captura a los 3 minutos NO implementada todavía
  *
  * Cambios recientes:
  * - Añadida captura y envío manual de imagen a Telegram
  * - UI de captura con feedback visual del proceso
  * - Separación clara entre captura de imagen y envío
+ * - INTEGRACIÓN: Sección de alertas automáticas con estado visual
  */
 package com.vigia.app
 
@@ -47,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vigia.app.alert.AlertState
 import com.vigia.app.camera.CameraPreview
 import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.data.local.DataStoreRoiRepository
@@ -61,6 +65,9 @@ import com.vigia.app.ui.components.RoiOverlay
 import com.vigia.app.ui.components.RoiSelector
 import com.vigia.app.utils.PermissionsHelper
 import kotlinx.coroutines.flow.StateFlow
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Activity principal de VIGIA.
@@ -172,6 +179,15 @@ fun VigiaApp(
                     onDefineRoi = { viewModel.enterRoiSelectionMode() },
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
+
+                // Sección de alertas automáticas (solo visible cuando monitoring está activo)
+                if (uiState.isMonitoring) {
+                    AutoAlertSection(
+                        alertState = uiState.alertState,
+                        onClearState = { viewModel.clearAlertState() },
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                }
 
                 // Sección de captura y envío de imagen
                 ImageCaptureSection(
@@ -677,6 +693,136 @@ fun TelegramConfigSection(
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(top = 8.dp)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Sección de alertas automáticas que muestra el estado del envío automático.
+ */
+@Composable
+fun AutoAlertSection(
+    alertState: AlertState,
+    onClearState: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Solo mostrar si no está en idle
+    if (alertState is AlertState.Idle) {
+        return
+    }
+
+    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = when (alertState) {
+                is AlertState.Success -> Color(0xFFE8F5E9)
+                is AlertState.Error -> Color(0xFFFFEBEE)
+                is AlertState.Cooldown -> Color(0xFFFFF3E0) // Naranja claro
+                is AlertState.Sending -> MaterialTheme.colorScheme.surface
+                else -> MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Título según estado
+            when (alertState) {
+                is AlertState.Sending -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "Enviando alerta automática...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                is AlertState.Success -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "🚨 Alerta automática enviada",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF2E7D32)
+                        )
+                        Text(
+                            text = "${alertState.message} • ${timeFormat.format(Date(alertState.timestamp))}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF2E7D32).copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        TextButton(
+                            onClick = onClearState,
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Text("Ocultar", fontSize = 12.sp)
+                        }
+                    }
+                }
+                is AlertState.Error -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "⚠️ Alerta fallida",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFC62828)
+                        )
+                        Text(
+                            text = alertState.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFC62828).copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Text(
+                            text = "Hora: ${timeFormat.format(Date(alertState.timestamp))}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        TextButton(
+                            onClick = onClearState,
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Text("Ocultar", fontSize = 12.sp)
+                        }
+                    }
+                }
+                is AlertState.Cooldown -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "⏱️ Cooldown activo",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFEF6C00)
+                        )
+                        Text(
+                            text = "Alerta bloqueada para evitar spam • Espera ${alertState.remainingSeconds}s",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFEF6C00).copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Text(
+                            text = "(Se detectó cambio pero no se envió alerta)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
+                else -> {}
             }
         }
     }

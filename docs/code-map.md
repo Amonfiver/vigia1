@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Este documento describe la estructura actual del código para que cualquier desarrollador o agente pueda entender rápidamente qué existe, para qué sirce y dónde tocar según la tarea.
+Este documento describe la estructura actual del código para que cualquier desarrollador o agente pueda entender rápidamente qué existe, para qué sirve y dónde tocar según la tarea.
 
 ---
 
@@ -10,7 +10,9 @@ Este documento describe la estructura actual del código para que cualquier desa
 
 ```text
 app/src/main/java/com/vigia/app/
-├── MainActivity.kt                    # Activity principal, UI raíz
+├── MainActivity.kt                    # Activity principal, UI raíz (incluye AutoAlertSection)
+├── alert/                             # Alertas automáticas basadas en detección
+│   └── AlertManager.kt                # Gestor de alertas automáticas con anti-spam
 ├── camera/                            # Captura y procesamiento de frames
 │   ├── CameraPreview.kt               # Preview + ImageAnalysis use case
 │   └── FrameProcessor.kt              # Analizador YUV → luminancia + captura imagen
@@ -70,6 +72,26 @@ UI → MainViewModel → FrameProcessor.getLastFrameJpegBytes()
                               TelegramResult → UI
 ```
 
+### Alertas automáticas (flujo cuando se detecta cambio)
+```
+MonitoringManager.detectionResult → MainViewModel
+                                              ↓
+                              if hasChange == true
+                                              ↓
+                              AlertManager.onDetectionResult()
+                                              ↓
+                    ┌─────────────────────────┼─────────────────────────┐
+                    ↓                         ↓                         ↓
+           [Cooldown check]      FrameProcessor.getLastFrameJpegBytes()
+           [Config check]                                  ↓
+                    ↓                         ↓                         ↓
+           AlertState.Cooldown    TelegramService.sendMessage()  TelegramService.sendImage()
+           (si aplica)                      ↓                         ↓
+                                            ↓                         ↓
+                                    AlertState.Success/Error ←───────┘
+
+```
+
 ---
 
 ## Descripción de componentes clave
@@ -107,6 +129,17 @@ UI → MainViewModel → FrameProcessor.getLastFrameJpegBytes()
 - **Estado**: PROVISIONAL - debe reemplazarse por análisis más robusto
 - **Cuándo tocar**: Nunca mejorarlo, reemplazar por nueva implementación de RoiDetector
 
+### AlertManager (alert/AlertManager.kt)
+- **Qué hace**: Gestiona envío automático de alertas cuando el detector indica cambio
+- **Anti-spam**: Cooldown de 60 segundos entre alertas (evita spam continuo)
+- **Estados**: AlertState = Idle | Sending | Success(timestamp, message) | Error(timestamp, message) | Cooldown(remainingSeconds)
+- **Métodos clave**:
+  - onDetectionResult() - punto de entrada, verifica condiciones y dispara alerta
+  - sendAlert() - envía mensaje + imagen de forma secuencial
+  - clearState() - resetea estado a Idle
+  - resetCooldown() - fuerza reset del cooldown (para testing)
+- **Cuándo tocar**: Cambiar cooldown, añadir cola de alertas, configuración de mensajes
+
 ### TelegramService (telegram/TelegramService.kt)
 - **Qué hace**: Envía mensajes e imágenes vía Telegram Bot API
 - **Dependencia**: OkHttp para HTTP
@@ -120,14 +153,16 @@ UI → MainViewModel → FrameProcessor.getLastFrameJpegBytes()
 
 ### MainViewModel (ui/MainViewModel.kt)
 - **Qué hace**: Gestiona todo el estado de la UI y coordina acciones
-- **Gestiona**: ROI, Telegram, Monitorización, Detección, Captura de imagen
-- **Estados**: MainUiState con ScreenMode, TelegramTestState, DetectionResult, ImageCaptureState
+- **Gestiona**: ROI, Telegram, Monitorización, Detección, Captura de imagen, Alertas automáticas
+- **Estados**: MainUiState con ScreenMode, TelegramTestState, DetectionResult, ImageCaptureState, AlertState
+- **Dependencias**: AlertManager (inyectado por constructor)
 - **Métodos clave**:
   - connectCamera() - vincula cámara y FrameProcessor
   - saveTelegramConfig() - guarda config Telegram
   - testTelegramConnection() - prueba manual de envío de mensaje
   - captureAndSendImage() - captura y envío manual de imagen
   - startMonitoring() / stopMonitoring() - control vigilancia
+  - clearAlertState() - limpia estado de alerta en UI
 
 ---
 
@@ -136,20 +171,23 @@ UI → MainViewModel → FrameProcessor.getLastFrameJpegBytes()
 ### Para mejorar detección
 Crear nueva clase implementando RoiDetector, inyectar en MonitoringManager.
 
-### Para envío automático de alertas
-En MainViewModel, observar detectionResult y cuando hasChange == true, llamar a TelegramService.sendMessage() y sendImage().
+### Para modificar comportamiento de alertas automáticas
+Modificar AlertManager (cooldown, lógica de envío, mensajes) sin tocar TelegramService.
 
 ### Para segunda captura a los 3 minutos
-Usar WorkManager o Handler.postDelayed() para programar segunda captura tras alerta inicial.
+Usar coroutine delay o Handler.postDelayed() en AlertManager tras envío exitoso de primera alerta.
 
 ### Para múltiples ROIs
 Cambiar currentRoi: Roi? por List<Roi> en MonitoringManager y adaptar UI.
 
 ### Para reintentos de Telegram
-Ampliar TelegramService con cola de mensajes pendientes y lógica de reintento.
+Ampliar AlertManager o TelegramService con cola de mensajes pendientes y lógica de reintento.
 
 ### Para compresión de imágenes
 Añadir opciones de calidad JPEG en FrameProcessor antes de envío.
+
+### Para múltiples tipos de alerta
+Extender AlertState con nuevos tipos y modificar UI en AutoAlertSection.
 
 ---
 
@@ -180,3 +218,4 @@ Añadir opciones de calidad JPEG en FrameProcessor antes de envío.
 - Estado reactivo: StateFlow en todos los niveles
 - Lifecycle-aware: Camera vinculado a lifecycle de Compose/Activity
 - Captura de imagen: FrameProcessor almacena último frame, conversión YUV→JPEG bajo demanda
+- Alertas automáticas: DetectionResult → AlertManager → TelegramService, con anti-spam integrado
