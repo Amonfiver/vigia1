@@ -31,7 +31,7 @@ Durante las pruebas reales en dispositivo físico han aparecido bugs críticos q
 | **Crash al guardar Telegram** | `TelegramConfig.EMPTY` intentaba crear instancia con strings vacíos, violando `init { require(...) }` | Cambiado a `val EMPTY by lazy { TelegramConfig("__empty__", "__empty__") }` | ✅ Corregido |
 | **Crash potencial en ROI** | `Roi.UNDEFINED` con coordenadas (0f,0f,0f,0f) violaba `require(left < right)` | Cambiado a lazy con coordenadas válidas (0f,0f,0.1f,0.1f) | ✅ Corregido |
 | **Orientación no forzada** | MainActivity sin `android:screenOrientation` | Añadido `screenOrientation="landscape"` + `configChanges` | ✅ Corregido |
-| **ROI no parecía persistir** | La persistencia funcionaba, pero la UX no era clara | Sin cambios - se verificará que la persistencia funciona correctamente | ✅ Verificado |
+| **ROI no queda fijado al soltar** | `detectDragGestures` no siempre llamaba `onDragEnd`, dejando al usuario atrapado en el modo de selección | Reemplazado por `awaitPointerEventScope` con manejo explícito de Press/Move/Release | ✅ Corregido |
 
 #### Estado de correcciones
 

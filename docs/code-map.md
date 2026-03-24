@@ -228,6 +228,19 @@ Extender AlertState con nuevos tipos y modificar UI en AutoAlertSection.
 
 ## Notas importantes sobre bugs corregidos (2026-03-24)
 
+### Bug: ROI no quedaba fijado al soltar el dedo
+**Problema**: El componente `RoiSelector` usaba `detectDragGestures` de Compose, que tiene comportamientos internos que pueden no activar `onDragEnd` en ciertos gestos táctiles. Esto dejaba al usuario atrapado en el modo de selección sin poder confirmar el ROI.
+
+**Solución**: Reemplazado `detectDragGestures` por `awaitPointerEventScope` con manejo explícito de eventos:
+- `PointerEventType.Press`: Inicia la selección
+- `PointerEventType.Move`: Actualiza el rectángulo durante el arrastre  
+- `PointerEventType.Release`: **Siempre** finaliza la selección y fija el ROI
+
+**Archivo afectado**:
+- `ui/components/RoiSelector.kt` - Reescrito con `awaitPointerEventScope`
+
+---
+
 ### Bug: Crash al inicializar companion objects
 **Problema**: Las clases `Roi` y `TelegramConfig` tenían valores en el companion object que violaban las validaciones del bloque `init`:
 

@@ -655,4 +655,90 @@ Y añadido método `isValid()` para verificación consistente.
 
 ---
 
-## Entrada 015 - [Siguiente fase pendiente]
+## Entrada 015 - Corrección del flujo de selección de ROI
+
+### Fecha
+2026-03-24
+
+### Objetivo
+Corregir el problema crítico donde el ROI no quedaba fijado al soltar el dedo, dejando al usuario atrapado en el modo de selección.
+
+### Problema observado en dispositivo
+- Usuario entra en modo "Definir ROI"
+- Dibuja el rectángulo del tamaño deseado
+- Al soltar el dedo, el rectángulo NO queda fijado visualmente
+- No hay sensación clara de ROI ya definido
+- El usuario queda atrapado en la pantalla de definición
+
+### Causa raíz del problema
+El componente usaba `detectDragGestures` de Compose, que tiene comportamientos internos complejos:
+- Requiere un umbral mínimo de movimiento para considerar que hay un "drag"
+- El callback `onDragEnd` no siempre se invoca si el gesto no cumple ciertos criterios internos
+- En dispositivos táctiles reales, un simple "tocar y soltar rápido" podía no activar el flujo completo de drag
+
+Código problemático (ANTES):
+```kotlin
+detectDragGestures(
+    onDragStart = { ... },
+    onDrag = { change, dragAmount -> ... },
+    onDragEnd = {
+        // Este callback NO siempre se ejecutaba
+        selectionState = RoiSelectionState.Selected(rect)
+    }
+)
+```
+
+### Solución aplicada
+Reemplazado `detectDragGestures` por `awaitPointerEventScope` con manejo explícito de eventos táctiles:
+- `PointerEventType.Press`: Inicia la selección o el movimiento
+- `PointerEventType.Move`: Actualiza el rectángulo durante el arrastre
+- `PointerEventType.Release`: **Siempre** finaliza la selección y fija el ROI
+
+Código corregido (DESPUÉS):
+```kotlin
+awaitPointerEventScope {
+    while (true) {
+        val event = awaitPointerEvent()
+        when (event.type) {
+            PointerEventType.Press -> { ... }
+            PointerEventType.Move -> { ... }
+            PointerEventType.Release -> {
+                // AHORA SIEMPRE se ejecuta al soltar el dedo
+                selectionState = RoiSelectionState.Selected(rect)
+            }
+        }
+    }
+}
+```
+
+### Cambios adicionales
+- Reducido el umbral mínimo de ROI de 5% a 2% para ser más permisivo
+- Eliminadas importaciones no necesarias (`detectDragGestures`)
+- Actualizada documentación del archivo
+
+### Archivos modificados
+- `app/src/main/java/com/vigia/app/ui/components/RoiSelector.kt` - Reescrito completamente con awaitPointerEventScope
+
+### Tracking de subtareas
+
+- [x] Identificar causa del problema de selección de ROI
+- [x] Reemplazar detectDragGestures por awaitPointerEventScope
+- [x] Implementar manejo explícito de Press/Move/Release
+- [x] Asegurar que el ROI queda fijado al soltar el dedo
+- [x] Mantener funcionalidad de mover ROI existente
+- [x] Verificar compilación exitosa
+- [x] Actualizar docs/project-status.md
+- [x] Añadir entrada en docs/dev-log.md
+
+### Resultado esperado
+- Al soltar el dedo, el ROI queda fijado visualmente (rectángulo verde)
+- Aparecen los botones "Confirmar ROI" / "Cancelar"
+- El usuario puede confirmar y salir del modo de definición
+- Desaparece la sensación de estar "atrapado"
+
+### Fase actual
+**CORRECCIÓN DE BUGS COMPLETADA** - Pendiente validación final en dispositivo físico.
+
+---
+
+## Entrada 016 - [Siguiente fase pendiente]

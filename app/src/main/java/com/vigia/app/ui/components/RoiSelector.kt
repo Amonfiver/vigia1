@@ -5,10 +5,11 @@
  * Alcance: Capa de UI, componente de interacción para definición de ROI.
  *
  * Decisiones técnicas relevantes:
- * - Modifier.pointerInput para detectar gestos táctiles (toque, arrastre, reposicionamiento)
+ * - Modifier.pointerInput con awaitPointerEventScope para control directo de eventos táctiles
  * - Canvas para dibujar el rectángulo seleccionado
  * - Coordenadas normalizadas (0.0-1.0) independientes del tamaño de pantalla
  * - Estado ADDING para crear ROI nuevo, MOVING para reposicionar ROI existente
+ * - Manejo explícito de DOWN/MOVE/UP para evitar problemas con detectDragGestures
  *
  * Limitaciones temporales del MVP:
  * - Solo un ROI rectangular
@@ -16,7 +17,8 @@
  * - Sin rotación ni formas complejas
  *
  * Cambios recientes:
- * - Añadido modo de reposicionamiento (mover ROI completo)
+ * - CORRECCIÓN CRÍTICA: Reemplazado detectDragGestures por awaitPointerEventScope
+ * - Ahora el ROI queda fijado correctamente al soltar el dedo
  * - Mejorada gestión de estados de selección
  * - Validación de límites al mover
  */
@@ -24,7 +26,6 @@ package com.vigia.app.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,6 +35,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,89 +67,106 @@ fun RoiSelector(
     var selectionState by remember { mutableStateOf<RoiSelectionState>(RoiSelectionState.Idle) }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Capa táctil para detectar gestos
+        // Capa táctil para detectar gestos con control directo de eventos
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            val currentState = selectionState
-                            when (currentState) {
-                                is RoiSelectionState.Idle -> {
-                                    // Iniciar creación de nuevo ROI
-                                    selectionState = RoiSelectionState.Adding(
-                                        start = offset,
-                                        current = offset
-                                    )
-                                }
-                                is RoiSelectionState.Selected -> {
-                                    // Verificar si el toque está dentro del ROI para moverlo
-                                    val rect = createPixelRect(currentState.rect, size.width.toFloat(), size.height.toFloat())
-                                    if (rect.contains(offset)) {
-                                        selectionState = RoiSelectionState.Moving(
-                                            rect = currentState.rect,
-                                            dragStart = offset
-                                        )
-                                    } else {
-                                        // Tocar fuera reinicia la selección
-                                        selectionState = RoiSelectionState.Adding(
-                                            start = offset,
-                                            current = offset
-                                        )
-                                    }
-                                }
-                                else -> {}
-                            }
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            val currentState = selectionState
-                            when (currentState) {
-                                is RoiSelectionState.Adding -> {
-                                    selectionState = currentState.copy(current = change.position)
-                                }
-                                is RoiSelectionState.Moving -> {
-                                    // Calcular desplazamiento en coordenadas normalizadas
+                    awaitPointerEventScope {
+                        while (true) {
+                            // Esperar evento de puntero
+                            val event = awaitPointerEvent()
+                            val pointer = event.changes.firstOrNull() ?: continue
+
+                            when (event.type) {
+                                PointerEventType.Press -> {
+                                    val offset = pointer.position
                                     val width = size.width.toFloat()
                                     val height = size.height.toFloat()
-                                    val dxNorm = dragAmount.x / width
-                                    val dyNorm = dragAmount.y / height
 
-                                    // Nuevo rectángulo desplazado, validando límites
-                                    val newRect = Rect(
-                                        left = (currentState.rect.left + dxNorm).coerceIn(0f, 1f - currentState.rect.width),
-                                        top = (currentState.rect.top + dyNorm).coerceIn(0f, 1f - currentState.rect.height),
-                                        right = (currentState.rect.right + dxNorm).coerceIn(currentState.rect.width, 1f),
-                                        bottom = (currentState.rect.bottom + dyNorm).coerceIn(currentState.rect.height, 1f)
-                                    )
-                                    selectionState = RoiSelectionState.Moving(
-                                        rect = newRect,
-                                        dragStart = currentState.dragStart
-                                    )
-                                }
-                                else -> {}
-                            }
-                        },
-                        onDragEnd = {
-                            val currentState = selectionState
-                            when (currentState) {
-                                is RoiSelectionState.Adding -> {
-                                    val rect = createNormalizedRect(currentState.start, currentState.current)
-                                    if (rect.width > 0.05f && rect.height > 0.05f) { // Mínimo 5% del área
-                                        selectionState = RoiSelectionState.Selected(rect)
-                                    } else {
-                                        selectionState = RoiSelectionState.Idle
+                                    when (val currentState = selectionState) {
+                                        is RoiSelectionState.Idle -> {
+                                            // Iniciar creación de nuevo ROI
+                                            selectionState = RoiSelectionState.Adding(
+                                                start = offset,
+                                                current = offset
+                                            )
+                                        }
+                                        is RoiSelectionState.Selected -> {
+                                            // Verificar si el toque está dentro del ROI para moverlo
+                                            val pixelRect = createPixelRect(currentState.rect, width, height)
+                                            if (pixelRect.contains(offset)) {
+                                                selectionState = RoiSelectionState.Moving(
+                                                    rect = currentState.rect,
+                                                    dragStart = offset
+                                                )
+                                            } else {
+                                                // Tocar fuera reinicia la selección
+                                                selectionState = RoiSelectionState.Adding(
+                                                    start = offset,
+                                                    current = offset
+                                                )
+                                            }
+                                        }
+                                        else -> {}
                                     }
                                 }
-                                is RoiSelectionState.Moving -> {
-                                    // Finalizar reposicionamiento, mantener el ROI seleccionado
-                                    selectionState = RoiSelectionState.Selected(currentState.rect)
+                                PointerEventType.Move -> {
+                                    val offset = pointer.position
+                                    val width = size.width.toFloat()
+                                    val height = size.height.toFloat()
+
+                                    when (val currentState = selectionState) {
+                                        is RoiSelectionState.Adding -> {
+                                            selectionState = currentState.copy(current = offset)
+                                        }
+                                        is RoiSelectionState.Moving -> {
+                                            // Calcular desplazamiento desde el inicio del arrastre
+                                            val dx = offset.x - currentState.dragStart.x
+                                            val dy = offset.y - currentState.dragStart.y
+                                            val dxNorm = dx / width
+                                            val dyNorm = dy / height
+
+                                            // Nuevo rectángulo desplazado, validando límites
+                                            val originalRect = currentState.rect
+                                            val newRect = Rect(
+                                                left = (originalRect.left + dxNorm).coerceIn(0f, 1f - originalRect.width),
+                                                top = (originalRect.top + dyNorm).coerceIn(0f, 1f - originalRect.height),
+                                                right = (originalRect.right + dxNorm).coerceIn(originalRect.width, 1f),
+                                                bottom = (originalRect.bottom + dyNorm).coerceIn(originalRect.height, 1f)
+                                            )
+                                            selectionState = RoiSelectionState.Moving(
+                                                rect = newRect,
+                                                dragStart = currentState.dragStart
+                                            )
+                                        }
+                                        else -> {}
+                                    }
+
+                                    pointer.consume()
                                 }
-                                else -> {}
+                                PointerEventType.Release -> {
+                                    when (val currentState = selectionState) {
+                                        is RoiSelectionState.Adding -> {
+                                            val rect = createNormalizedRect(currentState.start, currentState.current)
+                                            // Reducido a 2% para ser más permisivo, pero manteniendo mínimo razonable
+                                            if (rect.width > 0.02f && rect.height > 0.02f) {
+                                                selectionState = RoiSelectionState.Selected(rect)
+                                            } else {
+                                                // ROI demasiado pequeño, volver a idle
+                                                selectionState = RoiSelectionState.Idle
+                                            }
+                                        }
+                                        is RoiSelectionState.Moving -> {
+                                            // Finalizar reposicionamiento, mantener el ROI seleccionado
+                                            selectionState = RoiSelectionState.Selected(currentState.rect)
+                                        }
+                                        else -> {}
+                                    }
+                                }
                             }
                         }
-                    )
+                    }
                 }
         ) {
             // Dibujar rectángulo según el estado
