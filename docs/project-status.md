@@ -15,6 +15,7 @@ El MVP actual tiene:
 - feedback visual del estado de alertas y confirmaciones en la UI
 - captura y envío manual de imagen como respaldo
 - **orientación forzada a landscape para uso industrial**
+- **selector de ROI reescrito basado en patrón probado de MindaVigilante**
 
 ## Estado actual
 
@@ -31,7 +32,7 @@ Durante las pruebas reales en dispositivo físico han aparecido bugs críticos q
 | **Crash al guardar Telegram** | `TelegramConfig.EMPTY` intentaba crear instancia con strings vacíos, violando `init { require(...) }` | Cambiado a `val EMPTY by lazy { TelegramConfig("__empty__", "__empty__") }` | ✅ Corregido |
 | **Crash potencial en ROI** | `Roi.UNDEFINED` con coordenadas (0f,0f,0f,0f) violaba `require(left < right)` | Cambiado a lazy con coordenadas válidas (0f,0f,0.1f,0.1f) | ✅ Corregido |
 | **Orientación no forzada** | MainActivity sin `android:screenOrientation` | Añadido `screenOrientation="landscape"` + `configChanges` | ✅ Corregido |
-| **ROI no queda fijado al soltar** | `detectDragGestures` no siempre llamaba `onDragEnd`, dejando al usuario atrapado en el modo de selección | Reemplazado por `awaitPointerEventScope` con manejo explícito de Press/Move/Release | ✅ Corregido |
+| **ROI no queda fijado al soltar** | Implementación anterior tenía bug en `createNormalizedRect`: trataba píxeles como normalizados | **REESCRITURA COMPLETA basada en `MindaRoiOverlayView.kt`** | ✅ Corregido |
 
 #### Estado de correcciones
 
@@ -40,6 +41,7 @@ Durante las pruebas reales en dispositivo físico han aparecido bugs críticos q
 - [x] Token y chat_id se guardan y recuperan correctamente
 - [x] ROI persiste y se recupera al reabrir
 - [x] Build compila correctamente
+- [x] **Selector de ROI reescrito con patrón robusto de MindaVigilante**
 - [ ] Pendiente verificación en dispositivo físico
 
 ---
@@ -107,9 +109,24 @@ Esta fase queda **CERRADA** con las siguientes entregas verificadas:
 
 ## Fase actual del proyecto
 
-**Fase CERRADA**: MVP funcional básico + estabilización del detector completados.
+**Fase ACTIVA**: Corrección de bugs críticos - Selector de ROI reescrito
 
-La app está **COMPILABLE, PROBADA Y LISTA** para uso básico. Todas las funcionalidades del MVP funcionan correctamente incluyendo la estabilización de detección.
+La app está **COMPILABLE** con la nueva implementación del selector ROI basada en el patrón probado de `MindaRoiOverlayView.kt`.
+
+### Cambio principal de esta iteración
+
+**REESCRITURA COMPLETA de `RoiSelector.kt`** basada en la implementación funcional de MindaVigilante (`docs/legacy/MindaRoiOverlayView.kt`):
+
+- **Patrón de eventos táctiles**: DOWN → MOVE → UP (manejo explícito)
+- **Rectángulo temporal durante creación**: Almacenado en píxeles, dibujado en amarillo
+- **Consolidación al soltar**: Conversión correcta píxeles → normalizado (0-1)
+- **ROI fijado visualmente**: Dibujado en verde al soltar el dedo
+- **Modo movimiento**: Mantener pulsado dentro del ROI para reposicionar
+- **Límites estrictos**: Clamp a los bordes de la vista durante movimiento
+- **Hit test**: Detección precisa de toque dentro del ROI
+
+### Archivos modificados en esta iteración
+- `app/src/main/java/com/vigia/app/ui/components/RoiSelector.kt` - **REESCRITO COMPLETAMENTE**
 
 ## Siguiente fase recomendada
 
@@ -127,6 +144,7 @@ Próximas mejoras posibles (requieren nueva fase/planificación):
 - El ROI lo define manualmente el usuario/desarrollador.
 - El ROI puede dibujarse y reposicionarse antes de confirmar.
 - El ROI se guarda localmente y se recupera en futuras sesiones.
+- **El selector de ROI ahora usa el patrón probado de MindaVigilante (eventos táctiles explícitos)**.
 - El análisis usa frames reales de CameraX (ImageAnalysis).
 - Telegram se configura manualmente y se prueba antes de usar.
 - La captura de imagen reutiliza el último frame procesado.
@@ -155,7 +173,7 @@ Próximas mejoras posibles (requieren nueva fase/planificación):
 - **Android Gradle Plugin**: 8.2.2
 - **Kotlin**: 1.9.22
 - **Estado de build**: ✅ COMPILA CORRECTAMENTE
-- **Warnings actuales**: 2 menores (parámetro no usado, variable no usada) - no bloqueantes
+- **Warnings actuales**: mínimos (no bloqueantes)
 
 ## Recordatorio de disciplina SDD
 

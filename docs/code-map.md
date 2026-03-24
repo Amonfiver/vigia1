@@ -229,15 +229,22 @@ Extender AlertState con nuevos tipos y modificar UI en AutoAlertSection.
 ## Notas importantes sobre bugs corregidos (2026-03-24)
 
 ### Bug: ROI no quedaba fijado al soltar el dedo
-**Problema**: El componente `RoiSelector` usaba `detectDragGestures` de Compose, que tiene comportamientos internos que pueden no activar `onDragEnd` en ciertos gestos táctiles. Esto dejaba al usuario atrapado en el modo de selección sin poder confirmar el ROI.
+**Problema**: La implementación original tenía un bug crítico en `createNormalizedRect`: recibía coordenadas en píxeles pero aplicaba `coerceIn(0f, 1f)` sin dividir por width/height. Esto forzaba coordenadas a 0 o 1, creando ROIs inválidos.
 
-**Solución**: Reemplazado `detectDragGestures` por `awaitPointerEventScope` con manejo explícito de eventos:
-- `PointerEventType.Press`: Inicia la selección
-- `PointerEventType.Move`: Actualiza el rectángulo durante el arrastre  
-- `PointerEventType.Release`: **Siempre** finaliza la selección y fija el ROI
+**Solución**: **REESCRITURA COMPLETA** basada en `MindaRoiOverlayView.kt` (docs/legacy/):
+- Separación clara: rectángulo temporal en **píxeles**, ROI consolidado en **normalizado (0-1)**
+- Estados simplificados: `Idle` → `Drawing` (píxeles) → `Selected` (normalizado) → `Moving` (píxeles)
+- Conversión correcta: `píxeles / dimension` solo al soltar el dedo
+- Hit test para detectar toque dentro de ROI existente
+- Límites estrictos con `coerceIn` durante movimiento
+
+**Patrón tomado de MindaRoiOverlayView.kt**:
+- Eventos táctiles explícitos: DOWN → MOVE → UP
+- Dibujo separado: amarillo (temporal) vs verde (consolidado)
+- Validación de tamaño mínimo (2%) antes de consolidar
 
 **Archivo afectado**:
-- `ui/components/RoiSelector.kt` - Reescrito con `awaitPointerEventScope`
+- `ui/components/RoiSelector.kt` - **REESCRITO COMPLETAMENTE** con patrón robusto
 
 ---
 

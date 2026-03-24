@@ -34,8 +34,8 @@ Crear la base documental y estructural del proyecto VIGIA1 en modo SDD.
 - docs/vision.md
 - docs/mvp-scope.md
 - docs/architecture.md
-- docs/roi-strategy.md
 - docs/telegram-flow.md
+- docs/roi-strategy.md
 - docs/setup-dev.md
 - docs/sdd/*
 - prompts/*
@@ -666,7 +666,7 @@ Corregir el problema crítico donde el ROI no quedaba fijado al soltar el dedo, 
 ### Problema observado en dispositivo
 - Usuario entra en modo "Definir ROI"
 - Dibuja el rectángulo del tamaño deseado
-- Al soltar el dedo, el rectángulo NO queda fijado visualmente
+- Al soltar el dedo, el rectángulo NO quedaba fijado visualmente
 - No hay sensación clara de ROI ya definido
 - El usuario queda atrapado en la pantalla de definición
 
@@ -741,4 +741,128 @@ awaitPointerEventScope {
 
 ---
 
-## Entrada 016 - [Siguiente fase pendiente]
+## Entrada 016 - REESCRITURA COMPLETA del selector ROI basado en MindaVigilante
+
+### Fecha
+2026-03-24
+
+### Objetivo
+Sustituir completamente la implementación del selector ROI por una versión robusta basada en el patrón probado de `MindaRoiOverlayView.kt` (proyecto MindaVigilante anterior).
+
+### Problema persistente
+La corrección anterior (entrada 015) mejoró el comportamiento pero **no resolvió el bug fundamental**: el ROI seguía sin quedar fijado correctamente al soltar el dedo en pruebas reales.
+
+Análisis del bug real:
+- La función `createNormalizedRect` recibía coordenadas en **píxeles** (ej: x=100f, y=500f)
+- Pero aplicaba `coerceIn(0f, 1f)` directamente sobre esos valores
+- Esto forzaba todas las coordenadas a 0f o 1f, creando un ROI inválido o de tamaño 1x1
+- **No se estaba dividiendo por width/height para normalizar**
+
+Código problemático (ANTES):
+```kotlin
+private fun createNormalizedRect(start: Offset, end: Offset): Rect {
+    val left = minOf(start.x, end.x).coerceIn(0f, 1f)  // BUG: píxeles tratados como normalizado
+    val top = minOf(start.y, end.y).coerceIn(0f, 1f)
+    val right = maxOf(start.x, end.x).coerceIn(0f, 1f)
+    val bottom = maxOf(start.y, end.y).coerceIn(0f, 1f)
+    return Rect(left, top, right, bottom)
+}
+```
+
+### Solución: REESCRITURA basada en MindaRoiOverlayView.kt
+
+Tomado como referencia: `docs/legacy/MindaRoiOverlayView.kt`
+
+Patrones extraídos y aplicados:
+1. **Separación clara de coordenadas**:
+   - Rectángulo temporal en **píxeles** durante creación/movimiento
+   - Conversión a **normalizado (0-1)** solo al soltar el dedo
+   
+2. **Estados simplificados y robustos**:
+   - `Idle`: Sin selección
+   - `Drawing`: Creando nuevo ROI (rectángulo en píxeles)
+   - `Selected`: ROI consolidado (coordenadas normalizadas)
+   - `Moving`: Reposicionando ROI existente (posición en píxeles)
+
+3. **Flujo de creación (DOWN → MOVE → UP)**:
+   - `Press`: Inicia rectángulo temporal en punto de toque (píxeles)
+   - `Move`: Actualiza esquina inferior-derecha del rectángulo temporal
+   - `Release`: Convierte a normalizado, valida tamaño mínimo (2%), pasa a Selected
+
+4. **Flujo de movimiento**:
+   - `Press` dentro de ROI: Calcula offset del punto de agarre
+   - `Move`: Calcula nueva posición manteniendo tamaño, con clamp a límites
+   - `Release`: Convierte posición actual a normalizado, pasa a Selected
+
+5. **Dibujo separado**:
+   - ROI temporal/durante movimiento: **Amarillo** (estilo provisional)
+   - ROI ya consolidado: **Verde** (estilo final)
+
+6. **Límites estrictos**:
+   - `coerceIn(0f, width - w)` durante movimiento para mantener ROI dentro de la vista
+   - Validación de tamaño mínimo antes de consolidar
+
+### Código corregido (DESPUÉS):
+```kotlin
+// Conversión CORRECTA: píxeles → normalizado
+private fun pixelsToNormalizedRect(pixelRect: Rect, width: Float, height: Float): Rect {
+    return Rect(
+        left = (min(pixelRect.left, pixelRect.right) / width).coerceIn(0f, 1f),
+        top = (min(pixelRect.top, pixelRect.bottom) / height).coerceIn(0f, 1f),
+        right = (max(pixelRect.left, pixelRect.right) / width).coerceIn(0f, 1f),
+        bottom = (max(pixelRect.top, pixelRect.bottom) / height).coerceIn(0f, 1f)
+    )
+}
+```
+
+### Archivos modificados
+- `app/src/main/java/com/vigia/app/ui/components/RoiSelector.kt` - **REESCRITO COMPLETAMENTE**
+
+### Tracking de subtareas
+
+- [x] Analizar patrón funcional de MindaRoiOverlayView.kt
+- [x] Identificar bug real en conversión de coordenadas
+- [x] Diseñar nuevos estados simplificados (Idle, Drawing, Selected, Moving)
+- [x] Implementar rectángulo temporal en píxeles
+- [x] Implementar conversión correcta píxeles → normalizado
+- [x] Implementar hit test para detectar toque dentro de ROI
+- [x] Implementar modo movimiento con límites estrictos
+- [x] Implementar dibujo separado (amarillo temporal vs verde final)
+- [x] Verificar compilación exitosa
+- [x] Actualizar docs/project-status.md
+- [x] Añadir entrada en docs/dev-log.md
+- [x] Actualizar docs/code-map.md
+
+### Cómo verificar manualmente
+
+1. **Abrir la app** en modo landscape
+2. **Tocar "Definir ROI"**
+3. **Dibujar un rectángulo** tocando y arrastrando:
+   - Ver rectángulo amarillo durante el arrastre
+   - Ver hint "Suelta para fijar el área"
+4. **Soltar el dedo**:
+   - El rectángulo debe cambiar a **verde** (indicando que está fijado)
+   - Deben aparecer los botones "Confirmar ROI" / "Cancelar"
+5. **Tocar "Confirmar ROI"**:
+   - El ROI se guarda y aparece en la pantalla principal
+6. **Redefinir ROI**:
+   - Tocar "Redefinir ROI"
+   - Mantener pulsado **dentro** del área verde para moverlo
+   - Soltar y confirmar
+
+### Resultado esperado
+- Al soltar el dedo tras dibujar, el ROI queda **fijado visualmente** (rectángulo verde)
+- El usuario puede **confirmar o cancelar** y salir del modo de definición
+- El ROI ya existente puede **moverse** manteniendo pulsado dentro de él
+- Desaparece el bloqueo del flujo de ROI
+
+### Fase actual
+**REESCRITURA COMPLETADA** - Pendiente validación en dispositivo físico.
+
+### Referencias
+- Patrón tomado de: `docs/legacy/MindaRoiOverlayView.kt`
+- Principios aplicados: separación píxeles/normalizado, eventos táctiles explícitos, estados simples, límites estrictos
+
+---
+
+## Entrada 017 - [Siguiente fase pendiente]
