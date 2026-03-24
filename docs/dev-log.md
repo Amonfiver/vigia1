@@ -551,10 +551,108 @@ Revisar el estado real del proyecto tras generación del Gradle Wrapper, cerrar 
 
 El proyecto está listo para continuar con nuevas mejoras en fases posteriores.
 
-### Siguiente paso recomendado
+---
 
-Decidir próxima fase de desarrollo:
-- Opción A: Ajustes de sensibilidad desde UI
-- Opción B: Persistencia de alertas ante cierre de app  
-- Opción C: Sistema de múltiples ROIs
-- Opción D: Historial de alertas
+## Entrada 014 - Corrección de bugs críticos en pruebas reales
+
+### Fecha
+2026-03-24
+
+### Objetivo
+Corregir bugs críticos detectados durante pruebas en dispositivo físico antes de continuar con nuevas funcionalidades.
+
+### Problemas detectados y corregidos
+
+#### 1. Crash al guardar configuración de Telegram
+**Síntoma**: Al pulsar "Guardar" en la configuración de Telegram, la app crasheaba inmediatamente.
+
+**Causa raíz**: En `TelegramConfig.kt`, el companion object intentaba crear una instancia estática:
+```kotlin
+val EMPTY = TelegramConfig("", "")
+```
+Esto violaba las validaciones del bloque `init`:
+```kotlin
+init {
+    require(botToken.isNotBlank()) { "botToken no puede estar vacío" }
+    require(chatId.isNotBlank()) { "chatId no puede estar vacío" }
+}
+```
+Cuando la clase se cargaba, el companion object se inicializaba, lanzando `IllegalArgumentException` inmediatamente, independientemente de si se usaba `EMPTY` o no.
+
+**Corrección**: Cambiado a inicialización lazy:
+```kotlin
+val EMPTY: TelegramConfig by lazy { 
+    TelegramConfig("__empty__", "__empty__") 
+}
+```
+
+#### 2. Crash potencial en ROI (mismo patrón)
+**Síntoma**: Potencial crash similar al de TelegramConfig.
+
+**Causa raíz**: En `Roi.kt`:
+```kotlin
+val UNDEFINED = Roi(0f, 0f, 0f, 0f)
+```
+Violaba:
+```kotlin
+init {
+    require(left < right) { "left debe ser menor que right" }
+    require(top < bottom) { "top debe ser menor que bottom" }
+}
+```
+
+**Corrección**: Cambiado a lazy con coordenadas válidas:
+```kotlin
+val UNDEFINED: Roi by lazy { 
+    Roi(0f, 0f, 0.1f, 0.1f)
+}
+```
+Y añadido método `isValid()` para verificación consistente.
+
+#### 3. Orientación no forzada a landscape
+**Síntoma**: La app rotaba libremente, pero el caso de uso industrial requiere orientación horizontal fija.
+
+**Causa raíz**: `AndroidManifest.xml` no tenía configurada la orientación de MainActivity.
+
+**Corrección**: Añadido en el manifest:
+```xml
+<activity
+    android:screenOrientation="landscape"
+    android:configChanges="orientation|screenSize">
+```
+
+### Archivos modificados
+- `app/src/main/AndroidManifest.xml` - Orientación forzada landscape
+- `app/src/main/java/com/vigia/app/domain/model/TelegramConfig.kt` - Fix crash companion object
+- `app/src/main/java/com/vigia/app/domain/model/Roi.kt` - Fix crash companion object + isValid()
+
+### Limitaciones temporales
+- Pendiente verificación completa en dispositivo físico
+- El ROI persistía correctamente, pero la UX podría mejorar para hacer más visible el estado guardado
+
+### Tracking de subtareas
+
+- [x] Identificar causa del crash de Telegram
+- [x] Corregir TelegramConfig.EMPTY (lazy initialization)
+- [x] Identificar causa del crash potencial de ROI
+- [x] Corregir Roi.UNDEFINED (lazy initialization)
+- [x] Añadir método isValid() a Roi para consistencia
+- [x] Forzar orientación landscape en AndroidManifest
+- [x] Verificar compilación exitosa
+- [x] Actualizar docs/project-status.md
+- [x] Añadir entrada en docs/dev-log.md
+
+### Fase actual
+**CORRECCIÓN DE BUGS COMPLETADA** - Pendiente validación en dispositivo físico.
+
+### Siguiente paso recomendado
+1. Probar en dispositivo físico que:
+   - La app se abre en horizontal
+   - Se puede guardar token y chat_id de Telegram sin crash
+   - Al reabrir la app, los datos de Telegram se recuperan
+   - El ROI se guarda y se recupera correctamente
+2. Si todo funciona, cerrar esta fase y continuar con mejoras del MVP
+
+---
+
+## Entrada 015 - [Siguiente fase pendiente]

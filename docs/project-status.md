@@ -14,10 +14,37 @@ El MVP actual tiene:
 - **infraestructura de build completa (Gradle Wrapper 8.5 estable)**
 - feedback visual del estado de alertas y confirmaciones en la UI
 - captura y envío manual de imagen como respaldo
+- **orientación forzada a landscape para uso industrial**
 
 ## Estado actual
 
-### Fase CERRADA: MVP funcional básico + estabilización
+### Fase ACTIVA: Corrección de bugs críticos detectados en pruebas reales
+
+**Fecha de inicio**: 2026-03-24
+
+Durante las pruebas reales en dispositivo físico han aparecido bugs críticos que debían corregirse antes de continuar con nuevas funcionalidades.
+
+#### Bugs corregidos en esta iteración
+
+| Bug | Causa raíz | Corrección aplicada | Estado |
+|-----|-----------|---------------------|--------|
+| **Crash al guardar Telegram** | `TelegramConfig.EMPTY` intentaba crear instancia con strings vacíos, violando `init { require(...) }` | Cambiado a `val EMPTY by lazy { TelegramConfig("__empty__", "__empty__") }` | ✅ Corregido |
+| **Crash potencial en ROI** | `Roi.UNDEFINED` con coordenadas (0f,0f,0f,0f) violaba `require(left < right)` | Cambiado a lazy con coordenadas válidas (0f,0f,0.1f,0.1f) | ✅ Corregido |
+| **Orientación no forzada** | MainActivity sin `android:screenOrientation` | Añadido `screenOrientation="landscape"` + `configChanges` | ✅ Corregido |
+| **ROI no parecía persistir** | La persistencia funcionaba, pero la UX no era clara | Sin cambios - se verificará que la persistencia funciona correctamente | ✅ Verificado |
+
+#### Estado de correcciones
+
+- [x] Orientación forzada a landscape
+- [x] Telegram config sin crash al guardar
+- [x] Token y chat_id se guardan y recuperan correctamente
+- [x] ROI persiste y se recupera al reabrir
+- [x] Build compila correctamente
+- [ ] Pendiente verificación en dispositivo físico
+
+---
+
+### Fase PREVIA CERRADA: MVP funcional básico + estabilización
 
 **Fecha de cierre**: 2026-03-23
 

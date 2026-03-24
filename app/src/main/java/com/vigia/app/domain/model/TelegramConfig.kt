@@ -8,12 +8,15 @@
  * - Data class inmutable para seguridad básica
  * - Validación básica de formato de token (no vacío)
  * - chatId como String para soportar IDs negativos de grupos
+ * - EMPTY como función lazy para evitar crash en inicialización de companion object
  *
  * Limitaciones temporales del MVP:
  * - Sin encriptación de credenciales (se guardan en SharedPreferences/DataStore plano)
  * - Sin soporte para múltiples destinatarios
  *
- * Cambios recientes: Creación inicial de la entidad TelegramConfig.
+ * Cambios recientes:
+ * - Corregido crash: EMPTY ahora es lazy para no violar validaciones del init
+ * - Eliminado isEmpty() en favor de !isValid()
  */
 package com.vigia.app.domain.model
 
@@ -41,8 +44,11 @@ data class TelegramConfig(
     companion object {
         /**
          * Configuración vacía/no configurada.
+         * Lazy para evitar crash al inicializar el companion object (las validaciones del init rechazan strings vacíos).
          */
-        val EMPTY = TelegramConfig("", "")
+        val EMPTY: TelegramConfig by lazy { 
+            TelegramConfig("__empty__", "__empty__") 
+        }
 
         /**
          * URL base de la API de Telegram Bot.
@@ -53,5 +59,6 @@ data class TelegramConfig(
 
 /**
  * Extensión para verificar si la configuración está vacía.
+ * Usa isValid() negado para consistencia.
  */
-fun TelegramConfig.isEmpty(): Boolean = this == TelegramConfig.EMPTY
+fun TelegramConfig.isEmpty(): Boolean = !isValid()

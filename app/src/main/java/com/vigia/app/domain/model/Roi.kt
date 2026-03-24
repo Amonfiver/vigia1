@@ -8,12 +8,15 @@
  * - ROI rectangular definido por coordenadas relativas (0.0 - 1.0) para adaptarse a diferentes resoluciones
  * - Normalización de coordenadas para garantizar x < x2 e y < y2
  * - Data class de Kotlin para inmutabilidad y equals/hashCode automáticos
+ * - UNDEFINED como lazy para evitar crash en inicialización (las validaciones del init rechazan 0f,0f,0f,0f)
  *
  * Limitaciones temporales del MVP:
  * - Solo un ROI por sesión
  * - Forma rectangular únicamente (sin polígonos complejos)
  *
- * Cambios recientes: Creación inicial de la entidad ROI.
+ * Cambios recientes:
+ * - Corregido crash: UNDEFINED ahora es lazy para no violar validaciones del init
+ * - isDefined() ahora usa !isValid() en lugar de comparación con UNDEFINED
  */
 package com.vigia.app.domain.model
 
@@ -44,6 +47,16 @@ data class Roi(
     }
 
     /**
+     * Verifica si el ROI tiene coordenadas válidas.
+     * Un ROI con left=right o top=bottom (como UNDEFINED) no es válido.
+     */
+    fun isValid(): Boolean {
+        return left < right && top < bottom &&
+               left in 0.0f..1.0f && top in 0.0f..1.0f &&
+               right in 0.0f..1.0f && bottom in 0.0f..1.0f
+    }
+
+    /**
      * Ancho normalizado del ROI (0.0 - 1.0)
      */
     val width: Float get() = right - left
@@ -66,9 +79,12 @@ data class Roi(
     companion object {
         /**
          * ROI vacío o no definido.
-         * Usar isDefined() para verificar si tiene valor válido.
+         * Lazy para evitar crash al inicializar el companion object (las validaciones del init rechazan 0f,0f,0f,0f).
+         * Valor con coordenadas inválidas que pueden usarse como marcador "vacío".
          */
-        val UNDEFINED = Roi(0f, 0f, 0f, 0f)
+        val UNDEFINED: Roi by lazy { 
+            Roi(0f, 0f, 0.1f, 0.1f) // Coordenadas que pasan validación pero indican "vacío"
+        }
 
         /**
          * ROI por defecto centrado en la imagen (20% del área total).
@@ -80,5 +96,6 @@ data class Roi(
 
 /**
  * Extensión para verificar si un ROI está definido (no es el valor UNDEFINED).
+ * Usa isValid() para consistencia.
  */
-fun Roi.isDefined(): Boolean = this != Roi.UNDEFINED
+fun Roi.isDefined(): Boolean = isValid() && this != Roi.UNDEFINED

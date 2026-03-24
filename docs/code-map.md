@@ -221,10 +221,35 @@ Extender AlertState con nuevos tipos y modificar UI en AutoAlertSection.
 
 ## Archivos a NO tocar sin razón fuerte
 
-- domain/model/Roi.kt: Modelo estable, cambios rompen persistencia
-- domain/model/TelegramConfig.kt: Modelo estable, cambios rompen persistencia
+- domain/model/Roi.kt: Modelo estable, cambios rompen persistencia. NOTA: Corregido bug de inicialización en companion object (UNDEFINED ahora es lazy)
+- domain/model/TelegramConfig.kt: Modelo estable, cambios rompen persistencia. NOTA: Corregido bug de inicialización en companion object (EMPTY ahora es lazy)
 - domain/repository/*: Contratos de persistencia, afectan DataStore
 - data/local/*: Implementación de persistencia, migraciones complejas
+
+## Notas importantes sobre bugs corregidos (2026-03-24)
+
+### Bug: Crash al inicializar companion objects
+**Problema**: Las clases `Roi` y `TelegramConfig` tenían valores en el companion object que violaban las validaciones del bloque `init`:
+
+```kotlin
+// ANTES (crash):
+companion object {
+    val UNDEFINED = Roi(0f, 0f, 0f, 0f)  // Violaba require(left < right)
+    val EMPTY = TelegramConfig("", "")      // Violaba require(botToken.isNotBlank())
+}
+
+// DESPUÉS (corregido):
+companion object {
+    val UNDEFINED: Roi by lazy { Roi(0f, 0f, 0.1f, 0.1f) }
+    val EMPTY: TelegramConfig by lazy { TelegramConfig("__empty__", "__empty__") }
+}
+```
+
+**Solución**: Usar inicialización lazy para posponer la creación hasta que se accede al valor.
+
+**Archivos afectados**:
+- `domain/model/Roi.kt` - Añadido `isValid()` y `UNDEFINED` como lazy
+- `domain/model/TelegramConfig.kt` - `EMPTY` como lazy, `isEmpty()` usa `!isValid()`
 
 ---
 

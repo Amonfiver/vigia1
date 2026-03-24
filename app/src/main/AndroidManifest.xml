@@ -10,12 +10,16 @@
   - Permiso INTERNET para comunicación con Telegram Bot API
   - Feature camera.any para indicar uso de cámara (no obligatoria si solo es trasera)
   - android:exported="true" en MainActivity para permitir lanzamiento desde launcher
+  - Orientación forzada a landscape (horizontal) para uso industrial del MVP
 
   Limitaciones temporales del MVP:
   - Sin permisos de foreground service todavía (se añadirán si se necesita servicio persistente)
   - Sin configuración avanzada de backup o seguridad de red
+  - Orientación fija a landscape (no rotable)
 
-  Cambios recientes: Creación inicial del manifest.
+  Cambios recientes:
+  - Añadida orientación forzada landscape (android:screenOrientation="landscape")
+  - Corrección de crash en persistencia de Telegram
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -43,7 +47,9 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.Vigia1">
+            android:theme="@style/Theme.Vigia1"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
