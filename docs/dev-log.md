@@ -1005,4 +1005,209 @@ Warnings: 4 menores (deprecated durante transición)
 
 ---
 
-## Entrada 018 - [Siguiente fase pendiente]
+## Entrada 018 - Corrección pipeline cromático + Baseline manual OK
+
+### Fecha
+2026-03-25
+
+### Objetivo
+Corregir el pipeline de captura de imágenes con artefactos de color y añadir baseline manual de estado OK.
+
+### Qué se hizo
+
+#### 1. Corrección del pipeline de captura en color
+- **Problema**: Capturas/crops mostraban dominantes verde/magenta
+- **Causa raíz**: `storeFrameForCapture()` ignoraba `rowStride` de planos YUV
+- **Solución**: Almacenar buffers con sus strides y construir NV21 respetando alineación
+- **Archivo modificado**: `camera/FrameProcessor.kt`
+
+#### 2. Baseline manual de estado OK
+- **Modelo**: `domain/model/OkBaselineSample.kt` (muestra con imagen JPEG + metadatos)
+- **Repositorio**: `domain/repository/OkBaselineRepository.kt` + `data/local/FileOkBaselineRepository.kt`
+- **Funcionalidad**: Capturar 5-10 muestras de estado OK, almacenar localmente, contar, reiniciar
+- **Integración**: `MainViewModel` con métodos `captureOkBaselineSample()`, `resetOkBaseline()`
+
+#### 3. Evidencias visuales separadas
+- **Referencia actual**: Crop del ROI en tiempo real (`referenceCrop`)
+- **Último evento**: Crop que disparó la alerta (`lastEventCrop`)
+- **Última confirmación**: Crop de confirmación a 3 min (`lastConfirmationCrop`)
+- **Estado**: `VisualEvidenceState` en `MainUiState`
+
+### Archivos creados
+- `domain/model/OkBaselineSample.kt`
+- `domain/repository/OkBaselineRepository.kt`
+- `data/local/FileOkBaselineRepository.kt`
+
+### Archivos modificados
+- `camera/FrameProcessor.kt` - Corrección pipeline de color
+- `ui/MainViewModel.kt` - Baseline OK y evidencias visuales
+- `docs/project-status.md` - Actualizado
+- `docs/dev-log.md` - Esta entrada
+
+### Tracking de subtareas
+
+- [x] Identificar causa raíz del problema de color (rowStride ignorado)
+- [x] Corregir conversión YUV→NV21 respetando strides
+- [x] Crear modelo OkBaselineSample
+- [x] Crear repositorio OkBaselineRepository
+- [x] Implementar FileOkBaselineRepository (persistencia local)
+- [x] Añadir métodos baseline a MainViewModel
+- [x] Implementar evidencias visuales separadas (reference, evento, confirmación)
+- [x] Actualizar documentación viva
+- [x] Verificar compilación exitosa
+
+### Estado de build
+✅ COMPILA CORRECTAMENTE (3 warnings menores)
+
+### Cómo verificar manualmente
+
+1. **Pipeline de color corregido**:
+   - Iniciar vigilancia con ROI definido
+   - Capturar imagen manualmente
+   - Verificar que no hay dominantes verde/magenta
+
+2. **Baseline OK**:
+   - Asegurar estado normal del transfer
+   - Llamar `captureOkBaselineSample()` (desde UI futura)
+   - Verificar contador incrementa (1/10, 2/10...)
+   - Verificar archivos en `/data/data/com.vigia.app/files/ok_baseline/`
+
+3. **Evidencias visuales**:
+   - Durante monitorización, `referenceCrop` se actualiza
+   - Al detectar cambio, `lastEventCrop` se captura
+   - Al enviar confirmación, `lastConfirmationCrop` se captura
+
+### Limitaciones temporales
+- Baseline OK solo almacena, sin comparación automática todavía
+- UI de baseline y evidencias visuales pendiente de implementación en MainActivity
+- Sin análisis estadístico de las muestras OK
+
+### Siguiente paso recomendado
+Implementar UI en MainActivity para:
+- Botón "Capturar muestra OK" con contador
+- Visualización de evidencias separadas (3 crops)
+- Botón "Reiniciar baseline"
+
+---
+
+## Entrada 019 - Modo de entrenamiento supervisado manual
+
+### Fecha
+2026-03-25
+
+### Objetivo
+Implementar un modo de entrenamiento manual para capturar y almacenar muestras etiquetadas del transfer con tres clases: OK, OBSTACULO, FALLO.
+
+### Qué se hizo
+
+#### 1. Modelo de datos de entrenamiento
+- **Enum ClassLabel**: OK, OBSTACULO, FALLO
+- **TrainingSample**: id único, etiqueta, timestamp, imagen JPEG (crop ROI), metadatos ROI/subregión
+- **TrainingDatasetState**: contadores por clase, métodos de utilidad (isComplete, canAddMore)
+- **TrainingCaptureState**: estados de captura (Idle, Capturing, Saving, Success, Error)
+
+#### 2. Repositorio de persistencia
+- **Interfaz TrainingDatasetRepository**: contrato limpio con operaciones por clase
+- **FileTrainingDatasetRepository**: implementación con almacenamiento en archivos
+  - Estructura: `filesDir/training/OK/`, `OBSTACULO/`, `FALLO/`
+  - Formato: JPEG + .meta (texto simple key=value)
+  - IDs únicos: timestamp + UUID corto
+  - Límite: 50 muestras por clase
+
+#### 3. Integración en MainViewModel
+- **Estado**: trainingDatasetState, trainingCaptureState, selectedTrainingClass
+- **Métodos**:
+  - `enterTrainingMode()`: cambia a ScreenMode.TRAINING
+  - `selectTrainingClass()`: cambia clase seleccionada
+  - `captureTrainingSample()`: captura crop del ROI, convierte a JPEG, guarda
+  - `clearTrainingClass()`: elimina muestras de clase específica
+  - `clearAllTrainingData()`: elimina todo el dataset
+
+#### 4. UI de entrenamiento completa (MainActivity)
+- **ClassSelector**: tres botones visuales con color y emoji
+- **ClassCounters**: muestra contadores OK/OBSTACULO/FALLO (X/50)
+- **TrainingCaptureButton**: captura con feedback visual y estados
+- **TrainingManagementButtons**: reiniciar clase, reiniciar todo, volver
+- **Integración**: nuevo modo ScreenMode.TRAINING en when principal
+
+### Archivos creados
+- `domain/model/TrainingSample.kt` - Modelo completo de muestras etiquetadas
+- `domain/repository/TrainingDatasetRepository.kt` - Interfaz de persistencia
+- `data/local/FileTrainingDatasetRepository.kt` - Implementación archivo-based
+
+### Archivos modificados
+- `ui/MainViewModel.kt` - Lógica de entrenamiento completa
+- `MainActivity.kt` - UI de entrenamiento + composables nuevos
+- `ui/ScreenMode.kt` implícito - Añadido TRAINING
+
+### Tracking de subtareas
+
+- [x] Definir modelo TrainingSample con tres clases
+- [x] Crear enum ClassLabel (OK, OBSTACULO, FALLO)
+- [x] Crear interfaz TrainingDatasetRepository
+- [x] Implementar FileTrainingDatasetRepository con carpetas por clase
+- [x] Añadir estado de entrenamiento a MainUiState
+- [x] Implementar métodos de captura en MainViewModel
+- [x] Crear UI de selector de clase (3 botones visuales)
+- [x] Crear UI de contadores por clase
+- [x] Crear UI de botón de captura con feedback
+- [x] Crear UI de gestión (reiniciar clase/todo/volver)
+- [x] Integrar modo TRAINING en flujo de navegación
+- [x] Actualizar documentación viva
+- [x] Verificar compilación exitosa
+
+### Estado de build
+✅ COMPILA CORRECTAMENTE (3 warnings menores preexistentes)
+
+### Cómo usar el modo de entrenamiento
+
+1. **Abrir app** → modo normal
+2. **Definir ROI** del transfer (si no está definido)
+3. **Pulsar "🎓 Modo Entrenamiento"** (botón en vista normal)
+4. **Seleccionar clase**: OK (verde), OBSTACULO (naranja), o FALLO (rojo)
+5. **Asegurar estado visual correcto** del transfer para la clase elegida
+6. **Pulsar "📸 Capturar muestra"** (repetir 5-10+ veces)
+7. **Ver contador incrementar** (X/50)
+8. **Cambiar clase** y repetir
+9. **Volver al modo normal** cuando se complete el dataset
+
+### Estructura de almacenamiento
+```
+/data/data/com.vigia.app/files/training/
+├── OK/
+│   ├── OK_1234567890_abc12345.jpg
+│   ├── OK_1234567890_abc12345.meta
+│   └── ...
+├── OBSTACULO/
+│   ├── OBSTACULO_1234567890_def67890.jpg
+│   ├── OBSTACULO_1234567890_def67890.meta
+│   └── ...
+└── FALLO/
+    ├── FALLO_1234567890_ghi11111.jpg
+    ├── FALLO_1234567890_ghi11111.meta
+    └── ...
+```
+
+### Limitaciones temporales
+- Dataset solo almacena, sin clasificación automática todavía
+- Sin metadatos avanzados (histograma, características HSV extraídas)
+- Sin sincronización con cloud
+- Baseline OK anterior marcado como legacy (sigue funcionando pero no es preferido)
+
+### Relación con baseline OK anterior
+El baseline OK de la iteración anterior sigue disponible pero se considera **legacy**. El nuevo modo de entrenamiento es superior porque:
+- Permite múltiples clases (no solo OK)
+- Mayor capacidad (50 vs 10 muestras)
+- Organización por carpetas más clara
+- Preparación directa para clasificación supervisada
+
+### Siguiente paso recomendado
+Implementar clasificación automática basada en el dataset:
+- Comparar imagen actual contra muestras almacenadas
+- Calcular similitud (histograma, características HSV)
+- Clasificar automáticamente en OK/OBSTACULO/FALLO
+- Usar para detección automática en lugar de umbrales genéricos
+
+---
+
+## Entrada 020 - [Siguiente fase pendiente]

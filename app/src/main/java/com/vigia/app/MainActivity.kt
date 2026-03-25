@@ -2,7 +2,8 @@
  * Archivo: app/src/main/java/com/vigia/app/MainActivity.kt
  * Propósito: Activity principal de VIGIA1, punto de entrada de la aplicación.
  * Responsabilidad principal: Contener la UI principal, gestionar permisos de cámara, modo de selección de ROI,
- * configuración de Telegram, captura de imagen, mostrar estado de detección y alertas automáticas.
+ * configuración de Telegram, captura de imagen, mostrar estado de detección, alertas automáticas,
+ * y modo de entrenamiento supervisado manual.
  * Alcance: Capa de presentación, pantalla principal de la app.
  *
  * Decisiones técnicas relevantes:
@@ -12,23 +13,24 @@
  * - Solicitud de permisos en tiempo de ejecución para cámara
  * - Preview de cámara real usando CameraX con análisis de frames
  * - Modo de selección de ROI con superposición táctil
+ * - Modo de entrenamiento supervisado con tres clases (OK, OBSTACULO, FALLO)
  * - Configuración de Telegram funcional con prueba manual
  * - Captura y envío manual de imagen a Telegram
- * - Visualización de estado de detección en tiempo real basado en frames reales
- * - Visualización de estado de alertas automáticas (éxito, error, cooldown)
+ * - Visualización de estado de detección en tiempo real
+ * - Visualización de estado de alertas automáticas
  *
  * Limitaciones temporales del MVP:
  * - FrameData de análisis es procesado a 320x240 para rendimiento
  * - Lógica de detección provisional basada en luminancia simple
  * - Cooldown de alertas fijo a 60 segundos
  * - Confirmación se pierde si la app se cierra antes de los 3 minutos
+ * - Dataset de entrenamiento solo almacena, sin clasificación automática todavía
  *
  * Cambios recientes:
- * - Añadida captura y envío manual de imagen a Telegram
- * - UI de captura con feedback visual del proceso
- * - Separación clara entre captura de imagen y envío
- * - INTEGRACIÓN: Sección de alertas automáticas con estado visual
- * - INTEGRACIÓN: Sección de confirmación diferida (3 minutos) con countdown en UI
+ * - AÑADIDO: Modo de entrenamiento supervisado manual con UI completa
+ * - AÑADIDO: Sección de entrenamiento con selección de clase y contadores
+ * - AÑADIDO: Botón para acceder al modo de entrenamiento desde vista normal
+ * - MANTENIDO: Todas las funcionalidades previas (vigilancia, Telegram, ROI)
  */
 package com.vigia.app
 
@@ -57,12 +59,18 @@ import com.vigia.app.camera.CameraPreview
 import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.data.local.DataStoreRoiRepository
 import com.vigia.app.data.local.DataStoreTelegramConfigRepository
+import com.vigia.app.data.local.FileTrainingDatasetRepository
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
+import com.vigia.app.domain.model.ClassLabel
+import com.vigia.app.domain.model.TrainingCaptureState
+import com.vigia.app.domain.model.TrainingSample
 import com.vigia.app.ui.ImageCaptureState
+import com.vigia.app.ui.MainUiState
 import com.vigia.app.ui.MainViewModel
 import com.vigia.app.ui.ScreenMode
 import com.vigia.app.ui.TelegramTestState
+import com.vigia.app.domain.model.TrainingDatasetState
 import com.vigia.app.ui.components.RoiOverlay
 import com.vigia.app.ui.components.RoiSelector
 import com.vigia.app.utils.PermissionsHelper
@@ -84,7 +92,8 @@ class MainActivity : ComponentActivity() {
         // Inicializar ViewModel con repositorios
         viewModel = MainViewModel(
             roiRepository = DataStoreRoiRepository(this),
-            telegramConfigRepository = DataStoreTelegramConfigRepository(this)
+            telegramConfigRepository = DataStoreTelegramConfigRepository(this),
+            trainingDatasetRepository = FileTrainingDatasetRepository(this)
         )
 
         // Configurar Compose
@@ -124,9 +133,6 @@ class MainActivity : ComponentActivity() {
 
 /**
  * Composable raíz de la aplicación VIGIA.
- *
- * @param viewModel ViewModel para gestión de estado
- * @param onRequestPermission Callback para solicitar permiso de cámara
  */
 @Composable
 fun VigiaApp(
@@ -169,79 +175,467 @@ fun VigiaApp(
                 .height(400.dp)
         )
 
-        // Controles inferiores según el modo
+        // Controles según el modo
         when (uiState.screenMode) {
             ScreenMode.NORMAL -> {
-                NormalModeControls(
-                    isMonitoring = uiState.isMonitoring,
-                    hasRoi = uiState.currentRoi != null,
-                    detectionResult = uiState.detectionResult,
-                    onStartMonitoring = { viewModel.startMonitoring() },
-                    onStopMonitoring = { viewModel.stopMonitoring() },
-                    onDefineRoi = { viewModel.enterRoiSelectionMode() },
+                NormalModeContent(
+                    uiState = uiState,
+                    viewModel = viewModel,
                     modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                // Sección de alertas automáticas (solo visible cuando monitoring está activo)
-                if (uiState.isMonitoring) {
-                    AutoAlertSection(
-                        alertState = uiState.alertState,
-                        onClearState = { viewModel.clearAlertState() },
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    
-                    // Sección de confirmación diferida (3 minutos después)
-                    ConfirmationSection(
-                        confirmationState = uiState.confirmationState,
-                        onClearState = { viewModel.clearConfirmationState() },
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                }
-
-                // Sección de captura y envío de imagen
-                ImageCaptureSection(
-                    captureState = uiState.imageCaptureState,
-                    hasTelegramConfig = uiState.telegramConfig?.isValid() == true,
-                    onCaptureAndSend = { viewModel.captureAndSendImage() },
-                    onClearState = { viewModel.clearImageCaptureState() },
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-
-                // Sección de configuración de Telegram
-                TelegramConfigSection(
-                    telegramConfig = uiState.telegramConfig,
-                    testState = uiState.telegramTestState,
-                    onSaveConfig = { botToken, chatId -> viewModel.saveTelegramConfig(botToken, chatId) },
-                    onTestConnection = { viewModel.testTelegramConnection() },
-                    onClearTestState = { viewModel.clearTelegramTestState() },
-                    modifier = Modifier.padding(bottom = 16.dp)
                 )
             }
             ScreenMode.ROI_SELECTION -> {
-                // En modo selección los controles están dentro del selector
                 Spacer(modifier = Modifier.height(12.dp))
             }
+            ScreenMode.TRAINING -> {
+                TrainingModeContent(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Contenido del modo normal (vigilancia, Telegram, etc.).
+ */
+@Composable
+fun NormalModeContent(
+    uiState: MainUiState,
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Controles de vigilancia y ROI
+        NormalModeControls(
+            isMonitoring = uiState.isMonitoring,
+            hasRoi = uiState.currentRoi != null,
+            detectionResult = uiState.detectionResult,
+            onStartMonitoring = { viewModel.startMonitoring() },
+            onStopMonitoring = { viewModel.stopMonitoring() },
+            onDefineRoi = { viewModel.enterRoiSelectionMode() },
+            onEnterTraining = { viewModel.enterTrainingMode() }
+        )
+
+        // Sección de alertas automáticas
+        if (uiState.isMonitoring) {
+            AutoAlertSection(
+                alertState = uiState.alertState,
+                onClearState = { viewModel.clearAlertState() },
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+            
+            ConfirmationSection(
+                confirmationState = uiState.confirmationState,
+                onClearState = { viewModel.clearConfirmationState() },
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
         }
 
-        // Texto de estado de monitorización
-        if (uiState.screenMode == ScreenMode.NORMAL) {
+        // Captura manual
+        ImageCaptureSection(
+            captureState = uiState.imageCaptureState,
+            hasTelegramConfig = uiState.telegramConfig?.isValid() == true,
+            onCaptureAndSend = { viewModel.captureAndSendImage() },
+            onClearState = { viewModel.clearImageCaptureState() },
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        // Configuración Telegram
+        TelegramConfigSection(
+            telegramConfig = uiState.telegramConfig,
+            testState = uiState.telegramTestState,
+            onSaveConfig = { botToken, chatId -> viewModel.saveTelegramConfig(botToken, chatId) },
+            onTestConnection = { viewModel.testTelegramConnection() },
+            onClearTestState = { viewModel.clearTelegramTestState() },
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        // Estado
+        Text(
+            text = uiState.statusMessage,
+            fontSize = 18.sp,
+            color = if (uiState.isMonitoring) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+    }
+}
+
+/**
+ * Contenido del modo de entrenamiento supervisado.
+ */
+@Composable
+fun TrainingModeContent(
+    uiState: MainUiState,
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Título del modo
+        Text(
+            text = "🎓 Modo Entrenamiento",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        // Selector de clase
+        ClassSelector(
+            selectedClass = uiState.selectedTrainingClass,
+            onClassSelected = { viewModel.selectTrainingClass(it) }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Contadores por clase
+        ClassCounters(
+            datasetState = uiState.trainingDatasetState
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Botón de captura
+        TrainingCaptureButton(
+            captureState = uiState.trainingCaptureState,
+            selectedClass = uiState.selectedTrainingClass,
+            sampleCount = uiState.trainingDatasetState.countForLabel(uiState.selectedTrainingClass),
+            onCapture = { viewModel.captureTrainingSample() },
+            onClearState = { viewModel.clearTrainingCaptureState() }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Botones de gestión
+        TrainingManagementButtons(
+            onClearSelectedClass = { viewModel.clearTrainingClass(uiState.selectedTrainingClass) },
+            onClearAll = { viewModel.clearAllTrainingData() },
+            onExit = { viewModel.exitToNormalMode() }
+        )
+    }
+}
+
+/**
+ * Selector de clase para entrenamiento.
+ */
+@Composable
+fun ClassSelector(
+    selectedClass: ClassLabel,
+    onClassSelected: (ClassLabel) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
-                text = uiState.statusMessage,
-                fontSize = 18.sp,
-                color = if (uiState.isMonitoring) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
+                text = "Selecciona la clase a capturar",
+                style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                ClassButton(
+                    label = "OK",
+                    emoji = "✓",
+                    color = Color(0xFF4CAF50),
+                    isSelected = selectedClass == ClassLabel.OK,
+                    onClick = { onClassSelected(ClassLabel.OK) }
+                )
+                
+                ClassButton(
+                    label = "OBSTÁCULO",
+                    emoji = "⚠️",
+                    color = Color(0xFFFF9800),
+                    isSelected = selectedClass == ClassLabel.OBSTACULO,
+                    onClick = { onClassSelected(ClassLabel.OBSTACULO) }
+                )
+                
+                ClassButton(
+                    label = "FALLO",
+                    emoji = "🚨",
+                    color = Color(0xFFF44336),
+                    isSelected = selectedClass == ClassLabel.FALLO,
+                    onClick = { onClassSelected(ClassLabel.FALLO) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Botón individual de clase.
+ */
+@Composable
+fun ClassButton(
+    label: String,
+    emoji: String,
+    color: Color,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isSelected) color else color.copy(alpha = 0.3f)
+            ),
+            modifier = Modifier.size(80.dp, 60.dp)
+        ) {
+            Text(
+                text = emoji,
+                fontSize = 24.sp
+            )
+        }
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+            color = if (isSelected) color else MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+/**
+ * Contadores de muestras por clase.
+ */
+@Composable
+fun ClassCounters(
+    datasetState: TrainingDatasetState,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text(
+                text = "Muestras guardadas",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            
+            ClassCounterRow(
+                label = "OK",
+                count = datasetState.okSamples.size,
+                color = Color(0xFF4CAF50)
+            )
+            ClassCounterRow(
+                label = "OBSTÁCULO",
+                count = datasetState.obstaculoSamples.size,
+                color = Color(0xFFFF9800)
+            )
+            ClassCounterRow(
+                label = "FALLO",
+                count = datasetState.falloSamples.size,
+                color = Color(0xFFF44336)
+            )
+            
+            val total = datasetState.totalCount
+            Text(
+                text = "Total: $total muestras",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp),
+                color = MaterialTheme.colorScheme.outline
             )
         }
     }
 }
 
 /**
- * Área que muestra la preview de cámara, selector de ROI o overlay de ROI.
- * Versión actualizada para soporte cromático.
+ * Fila de contador individual.
+ */
+@Composable
+fun ClassCounterRow(
+    label: String,
+    count: Int,
+    color: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = color,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            text = "$count/${TrainingSample.MAX_SAMPLES_PER_CLASS}",
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Botón de captura de muestra de entrenamiento.
+ */
+@Composable
+fun TrainingCaptureButton(
+    captureState: TrainingCaptureState,
+    selectedClass: ClassLabel,
+    sampleCount: Int,
+    onCapture: () -> Unit,
+    onClearState: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LaunchedEffect(captureState) {
+        if (captureState is TrainingCaptureState.Success || captureState is TrainingCaptureState.Error) {
+            kotlinx.coroutines.delay(3000)
+            onClearState()
+        }
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = when (captureState) {
+                is TrainingCaptureState.Success -> Color(0xFFE8F5E9)
+                is TrainingCaptureState.Error -> Color(0xFFFFEBEE)
+                else -> MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            val buttonColor = when (selectedClass) {
+                ClassLabel.OK -> Color(0xFF4CAF50)
+                ClassLabel.OBSTACULO -> Color(0xFFFF9800)
+                ClassLabel.FALLO -> Color(0xFFF44336)
+            }
+
+            Button(
+                onClick = onCapture,
+                enabled = captureState !is TrainingCaptureState.Capturing && 
+                         captureState !is TrainingCaptureState.Saving &&
+                         sampleCount < TrainingSample.MAX_SAMPLES_PER_CLASS,
+                colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                when (captureState) {
+                    is TrainingCaptureState.Capturing -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Capturando...")
+                        }
+                    }
+                    is TrainingCaptureState.Saving -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Guardando...")
+                        }
+                    }
+                    else -> Text("📸 Capturar muestra ${selectedClass.name}")
+                }
+            }
+
+            when (captureState) {
+                is TrainingCaptureState.Success -> {
+                    Text(
+                        text = "✓ ${captureState.message}",
+                        color = Color(0xFF2E7D32),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                is TrainingCaptureState.Error -> {
+                    Text(
+                        text = "✗ ${captureState.message}",
+                        color = Color(0xFFC62828),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                else -> {
+                    if (sampleCount >= TrainingSample.MAX_SAMPLES_PER_CLASS) {
+                        Text(
+                            text = "Límite alcanzado para esta clase",
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Botones de gestión del modo entrenamiento.
+ */
+@Composable
+fun TrainingManagementButtons(
+    onClearSelectedClass: () -> Unit,
+    onClearAll: () -> Unit,
+    onExit: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedButton(
+            onClick = onClearSelectedClass,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("🗑️ Reiniciar clase seleccionada")
+        }
+
+        OutlinedButton(
+            onClick = onClearAll,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Text("🗑️ Reiniciar TODO el dataset")
+        }
+
+        Button(
+            onClick = onExit,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondary
+            )
+        ) {
+            Text("← Volver al modo normal")
+        }
+    }
+}
+
+/**
+ * Área de cámara con overlay según el modo.
  */
 @Composable
 fun CameraArea(
@@ -256,16 +650,13 @@ fun CameraArea(
     modifier: Modifier = Modifier
 ) {
     if (!hasPermission) {
-        // Mostrar mensaje solicitando permiso
         Box(
             modifier = modifier
                 .background(MaterialTheme.colorScheme.errorContainer)
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "Se necesita permiso de cámara",
                     color = MaterialTheme.colorScheme.onErrorContainer,
@@ -282,20 +673,17 @@ fun CameraArea(
         return
     }
 
-    // Contenedor de la cámara con posible overlay
     Box(modifier = modifier) {
-        // Preview de cámara real con análisis de frames
         CameraPreview(
             modifier = Modifier.fillMaxSize(),
             onCameraReadyColor = { colorFlow, legacyFlow, processor ->
                 onCameraReady(colorFlow, legacyFlow, processor)
             },
-            onError = { /* Manejar error en fase posterior */ }
+            onError = { }
         )
 
         when (screenMode) {
             ScreenMode.ROI_SELECTION -> {
-                // Modo selección: mostrar selector táctil
                 RoiSelector(
                     onRoiSelected = onRoiSelected,
                     onCancel = onRoiSelectionCancelled,
@@ -303,12 +691,177 @@ fun CameraArea(
                 )
             }
             ScreenMode.NORMAL -> {
-                // Modo normal: mostrar overlay del ROI si existe
                 if (currentRoi != null) {
                     RoiOverlay(
                         roi = currentRoi,
                         isActive = isMonitoring,
                         modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            ScreenMode.TRAINING -> {
+                // En modo training mostramos el ROI pero sin indicador de activo
+                if (currentRoi != null) {
+                    RoiOverlay(
+                        roi = currentRoi,
+                        isActive = false,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Controles del modo normal.
+ */
+@Composable
+fun NormalModeControls(
+    isMonitoring: Boolean,
+    hasRoi: Boolean,
+    detectionResult: DetectionResult?,
+    onStartMonitoring: () -> Unit,
+    onStopMonitoring: () -> Unit,
+    onDefineRoi: () -> Unit,
+    onEnterTraining: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Indicador de detección
+        if (isMonitoring) {
+            DetectionStatusCard(
+                detectionResult = detectionResult,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            )
+        }
+
+        // Botones de vigilancia
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Button(
+                onClick = onStartMonitoring,
+                enabled = !isMonitoring,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Text("Iniciar vigilancia")
+            }
+
+            Button(
+                onClick = onStopMonitoring,
+                enabled = isMonitoring,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("Detener vigilancia")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Botón definir ROI
+        OutlinedButton(
+            onClick = onDefineRoi,
+            enabled = !isMonitoring,
+            modifier = Modifier.fillMaxWidth(0.8f)
+        ) {
+            Text(if (hasRoi) "Redefinir ROI" else "Definir ROI")
+        }
+
+        // Botón modo entrenamiento
+        OutlinedButton(
+            onClick = onEnterTraining,
+            enabled = !isMonitoring,
+            modifier = Modifier.fillMaxWidth(0.8f),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.tertiary
+            )
+        ) {
+            Text("🎓 Modo Entrenamiento")
+        }
+
+        // Indicador ROI
+        if (hasRoi) {
+            Text(
+                text = "✓ ROI definido",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        } else {
+            Text(
+                text = "Sin ROI definido",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Tarjeta que muestra el estado de detección en tiempo real.
+ */
+@Composable
+fun DetectionStatusCard(
+    detectionResult: DetectionResult?,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                detectionResult == null -> MaterialTheme.colorScheme.surfaceVariant
+                detectionResult.hasChange -> Color(0xFFFFEBEE)
+                else -> Color(0xFFE8F5E9)
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            when {
+                detectionResult == null -> {
+                    Text(
+                        text = "Análisis: Iniciando...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                detectionResult.hasChange -> {
+                    Text(
+                        text = "⚠️ Cambio detectado",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFC62828)
+                    )
+                    Text(
+                        text = detectionResult.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFC62828).copy(alpha = 0.8f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "✓ Sin cambio relevante",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF2E7D32)
+                    )
+                    Text(
+                        text = detectionResult.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF2E7D32).copy(alpha = 0.8f),
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
             }
@@ -327,7 +880,6 @@ fun ImageCaptureSection(
     onClearState: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Limpiar estado cuando se vuelve a mostrar la sección
     LaunchedEffect(Unit) {
         if (captureState !is ImageCaptureState.Idle) {
             onClearState()
@@ -392,7 +944,6 @@ fun ImageCaptureSection(
                 }
             }
 
-            // Mensaje de estado
             when (captureState) {
                 is ImageCaptureState.Success -> {
                     Text(
@@ -426,153 +977,6 @@ fun ImageCaptureSection(
 }
 
 /**
- * Controles del modo normal (vigilancia, definición de ROI y estado de detección).
- */
-@Composable
-fun NormalModeControls(
-    isMonitoring: Boolean,
-    hasRoi: Boolean,
-    detectionResult: DetectionResult?,
-    onStartMonitoring: () -> Unit,
-    onStopMonitoring: () -> Unit,
-    onDefineRoi: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // Indicador de estado de detección (solo cuando vigilancia activa)
-        if (isMonitoring) {
-            DetectionStatusCard(
-                detectionResult = detectionResult,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-            )
-        }
-
-        // Botones de vigilancia
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            Button(
-                onClick = onStartMonitoring,
-                enabled = !isMonitoring,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Text("Iniciar vigilancia")
-            }
-
-            Button(
-                onClick = onStopMonitoring,
-                enabled = isMonitoring,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Text("Detener vigilancia")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Botón para definir/redefinir ROI
-        OutlinedButton(
-            onClick = onDefineRoi,
-            enabled = !isMonitoring,
-            modifier = Modifier.fillMaxWidth(0.8f)
-        ) {
-            Text(if (hasRoi) "Redefinir ROI" else "Definir ROI")
-        }
-
-        // Indicador de estado del ROI
-        if (hasRoi) {
-            Text(
-                text = "✓ ROI definido",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        } else {
-            Text(
-                text = "Sin ROI definido",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-    }
-}
-
-/**
- * Tarjeta que muestra el estado de detección en tiempo real.
- */
-@Composable
-fun DetectionStatusCard(
-    detectionResult: DetectionResult?,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = when {
-                detectionResult == null -> MaterialTheme.colorScheme.surfaceVariant
-                detectionResult.hasChange -> Color(0xFFFFEBEE) // Rojo claro
-                else -> Color(0xFFE8F5E9) // Verde claro
-            }
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            when {
-                detectionResult == null -> {
-                    Text(
-                        text = "Análisis: Iniciando...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                detectionResult.hasChange -> {
-                    Text(
-                        text = "⚠️ Cambio detectado",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFC62828)
-                    )
-                    Text(
-                        text = detectionResult.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFC62828).copy(alpha = 0.8f),
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-                else -> {
-                    Text(
-                        text = "✓ Sin cambio relevante",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF2E7D32)
-                    )
-                    Text(
-                        text = detectionResult.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF2E7D32).copy(alpha = 0.8f),
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
  * Sección de configuración de Telegram funcional.
  */
 @Composable
@@ -587,7 +991,6 @@ fun TelegramConfigSection(
     var botToken by remember { mutableStateOf(telegramConfig?.botToken ?: "") }
     var chatId by remember { mutableStateOf(telegramConfig?.chatId ?: "") }
 
-    // Actualizar campos cuando cambia la configuración guardada
     LaunchedEffect(telegramConfig) {
         telegramConfig?.let {
             botToken = it.botToken
@@ -595,7 +998,6 @@ fun TelegramConfigSection(
         }
     }
 
-    // Limpiar estado de prueba cuando se modifican los campos
     LaunchedEffect(botToken, chatId) {
         if (testState !is TelegramTestState.Idle) {
             onClearTestState()
@@ -639,7 +1041,6 @@ fun TelegramConfigSection(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Botones de acción
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -676,7 +1077,6 @@ fun TelegramConfigSection(
                 }
             }
 
-            // Estado de la prueba
             when (testState) {
                 is TelegramTestState.Success -> {
                     Text(
@@ -697,7 +1097,6 @@ fun TelegramConfigSection(
                 else -> {}
             }
 
-            // Indicador de configuración guardada
             if (telegramConfig?.isValid() == true && testState is TelegramTestState.Idle) {
                 Text(
                     text = "✓ Configuración guardada",
@@ -711,7 +1110,7 @@ fun TelegramConfigSection(
 }
 
 /**
- * Sección de alertas automáticas que muestra el estado del envío automático.
+ * Sección de alertas automáticas.
  */
 @Composable
 fun AutoAlertSection(
@@ -719,7 +1118,6 @@ fun AutoAlertSection(
     onClearState: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Solo mostrar si no está en idle
     if (alertState is AlertState.Idle) {
         return
     }
@@ -732,7 +1130,7 @@ fun AutoAlertSection(
             containerColor = when (alertState) {
                 is AlertState.Success -> Color(0xFFE8F5E9)
                 is AlertState.Error -> Color(0xFFFFEBEE)
-                is AlertState.Cooldown -> Color(0xFFFFF3E0) // Naranja claro
+                is AlertState.Cooldown -> Color(0xFFFFF3E0)
                 is AlertState.Sending -> MaterialTheme.colorScheme.surface
                 else -> MaterialTheme.colorScheme.surface
             }
@@ -744,7 +1142,6 @@ fun AutoAlertSection(
                 .padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Título según estado
             when (alertState) {
                 is AlertState.Sending -> {
                     Row(
@@ -798,12 +1195,6 @@ fun AutoAlertSection(
                             color = Color(0xFFC62828).copy(alpha = 0.8f),
                             modifier = Modifier.padding(top = 4.dp)
                         )
-                        Text(
-                            text = "Hora: ${timeFormat.format(Date(alertState.timestamp))}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
                         TextButton(
                             onClick = onClearState,
                             modifier = Modifier.padding(top = 4.dp)
@@ -826,12 +1217,6 @@ fun AutoAlertSection(
                             color = Color(0xFFEF6C00).copy(alpha = 0.8f),
                             modifier = Modifier.padding(top = 4.dp)
                         )
-                        Text(
-                            text = "(Se detectó cambio pero no se envió alerta)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
                     }
                 }
                 else -> {}
@@ -849,7 +1234,6 @@ fun ConfirmationSection(
     onClearState: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Solo mostrar si no está en idle
     if (confirmationState is ConfirmationState.Idle) {
         return
     }
@@ -860,9 +1244,9 @@ fun ConfirmationSection(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = when (confirmationState) {
-                is ConfirmationState.Success -> Color(0xFFE3F2FD) // Azul claro
+                is ConfirmationState.Success -> Color(0xFFE3F2FD)
                 is ConfirmationState.Error -> Color(0xFFFFEBEE)
-                is ConfirmationState.Scheduled -> Color(0xFFF3E5F5) // Púrpura claro
+                is ConfirmationState.Scheduled -> Color(0xFFF3E5F5)
                 is ConfirmationState.Sending -> MaterialTheme.colorScheme.surface
                 else -> MaterialTheme.colorScheme.surface
             }
@@ -888,12 +1272,6 @@ fun ConfirmationSection(
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF7B1FA2).copy(alpha = 0.8f),
                             modifier = Modifier.padding(top = 4.dp)
-                        )
-                        Text(
-                            text = "Hora programada: ${timeFormat.format(Date(confirmationState.scheduledTimestamp))}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
                 }
@@ -948,12 +1326,6 @@ fun ConfirmationSection(
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFC62828).copy(alpha = 0.8f),
                             modifier = Modifier.padding(top = 4.dp)
-                        )
-                        Text(
-                            text = "Hora: ${timeFormat.format(Date(confirmationState.timestamp))}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(top = 2.dp)
                         )
                         TextButton(
                             onClick = onClearState,

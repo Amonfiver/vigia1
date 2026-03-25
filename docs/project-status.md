@@ -18,97 +18,81 @@ El MVP actual tiene:
 - **selector de ROI reescrito basado en patrón probado de MindaVigilante**
 - **ANÁLISIS CROMÁTICO HSV: migración completada de grayscale a detección por color**
 - **subregión activa dentro del ROI global (60% centro con sesgo vertical)**
-- **base preparada para detección de naranja (obstáculo) y rojo (fallo)**
+- **CORREGIDO: Pipeline de captura en color sin artefactos verde/magenta**
+- **BASELINE MANUAL OK: flujo para capturar 5-10 muestras de estado OK del transfer**
+- **EVIDENCIAS VISUALES SEPARADAS: referencia actual, último evento, última confirmación**
+- **MODO ENTRENAMIENTO SUPERVISADO: captura de muestras etiquetadas OK/OBSTACULO/FALLO**
 
 ---
 
 ## Estado actual
 
-### Fase ACTIVA: Refactorización a análisis cromático
+### Fase ACTIVA: Modo de entrenamiento supervisado implementado
 
 **Fecha de inicio**: 2026-03-25
 
-Se ha completado la refactorización de la base de análisis visual para que deje de depender de grayscale como señal principal y pase a usar información cromática.
+Se ha implementado un **modo de entrenamiento supervisado manual** para capturar y almacenar muestras etiquetadas del transfer. Esto permite construir un dataset local que servirá de base para clasificación en iteraciones futuras.
 
-#### Cambios implementados en esta iteración
+#### Dataset de entrenamiento implementado
 
-| Cambio | Descripción | Estado |
-|--------|-------------|--------|
-| **ColorFrameData** | Nueva estructura con píxeles HSV | ✅ Implementado |
-| **HSV vs RGB** | Decisión técnica: HSV separa tono de intensidad | ✅ Documentado |
-| **FrameProcessor** | Genera dual: ColorFrameData + FrameData legacy | ✅ Implementado |
-| **ColorBasedDetector** | Detector nuevo basado en color, no luminancia | ✅ Implementado |
-| **SubRegion** | Heurística espacial: 60% centro con sesgo 0.4 | ✅ Implementado |
-| **MonitoringManager** | Soporte dual: análisis cromático + legacy | ✅ Implementado |
-| **Integración UI** | CameraPreview, MainActivity, ViewModel actualizados | ✅ Implementado |
-| **Compilación** | Build exitoso con warnings menores (deprecated) | ✅ Verificado |
+**Tres clases de referencia**:
 
-#### Representación de color elegida: HSV
+1. **`OK`** - Estado normal / sano / sin incidencia
+   - Color: Verde (#4CAF50)
+   - Icono: ✓
 
-**¿Por qué HSV en lugar de RGB?**
-- **Separación clara**: HSV separa el tono (color) de la saturación e intensidad
-- **Robustez**: El canal H (Hue) es más invariante a cambios de iluminación que RGB
-- **Detección de naranja/rojo**: En HSV es directo (rangos de hue), en RGB es complejo
-- **Filtro de grises**: La saturación permite descartar fácilmente blancos/negros/grises
+2. **`OBSTACULO`** - Presencia de señal visual naranja / atención inmediata
+   - Color: Naranja (#FF9800)
+   - Icono: ⚠️
 
-**Rangos HSV usados:**
-- Naranja: Hue 15-35 (aprox 20°-50°)
-- Rojo: Hue 0-15 o 230-255 (aprox 0°-20° o 320°-360°)
-- Saturación mínima: 60 (evita grises)
+3. **`FALLO`** - Presencia de señal visual roja / franjas rojas / estado anómalo
+   - Color: Rojo (#F44336)
+   - Icono: 🚨
 
-#### Heurística espacial (subregión activa)
+**Estructura de almacenamiento**:
+- Directorio base: `filesDir/training/`
+- Subdirectorios por clase: `OK/`, `OBSTACULO/`, `FALLO/`
+- Formato: JPEG para imagen, `.meta` para metadatos (texto simple)
+- Límite: 50 muestras por clase (para no saturar almacenamiento)
+- Mínimo recomendado: 5 muestras por clase para entrenamiento básico
 
-**Problema**: El ROI global cubre toda la vía incluyendo:
-- Fondo blanco de la vía
-- Dos líneas negras paralelas
-- Cuerpo del transfer (zona informativa real)
+**Flujo de uso**:
+1. Usuario define el ROI del transfer
+2. Entra en modo "🎓 Modo Entrenamiento" (desde vista normal)
+3. Selecciona la clase a capturar (OK, OBSTACULO, FALLO)
+4. Captura 5-10+ muestras de esa clase
+5. Cambia de clase y repite el proceso
+6. Visualiza contadores por clase en tiempo real
+7. Puede reiniciar clase específica o todo el dataset
 
-**Solución implementada**:
-```
-Subregión activa = 60% del área central del ROI
-Sesgo vertical = 0.4 (ligeramente hacia arriba)
-Descripción: "Centro 60% del ROI (cuerpo del transfer)"
-```
+**UI de entrenamiento**:
+- Selector de clase con botones visuales (color + emoji)
+- Contadores por clase (X/50 muestras)
+- Botón de captura con feedback de progreso
+- Mensajes de éxito/error temporales (3 segundos)
+- Botones de gestión: reiniciar clase, reiniciar todo, volver
 
-**Coordenadas relativas al ROI**:
-- left/right: 0.20 - 0.80 (recorta 20% de cada lado)
-- top: 0.28 (sesgo hacia arriba)
-- bottom: 0.72
+**Componentes creados**:
+- `domain/model/TrainingSample.kt`: Modelo de datos con ClassLabel enum
+- `domain/repository/TrainingDatasetRepository.kt`: Interfaz de persistencia
+- `data/local/FileTrainingDatasetRepository.kt`: Implementación con archivos
+- `ui/MainViewModel.kt`: Lógica de captura, conteo, gestión
+- `MainActivity.kt`: UI completa del modo entrenamiento
 
-#### Clasificación por señales cromáticas
-
-**Señal A: Naranja** (umbral provisional 5%)
-- Interpretación: candidato a obstáculo / atención inmediata
-- Emoji: 🟠
-- Implementado en `ColorStats.hasSignificantOrange()`
-
-**Señal B: Rojo** (umbral provisional 5%)
-- Interpretación: candidato a fallo confirmado
-- Emoji: 🔴
-- Implementado en `ColorStats.hasSignificantRed()`
-
-**Nota**: La lógica temporal de persistencia (20 segundos) se afinará en iteración posterior.
-
-#### Observabilidad implementada
-
-**Crops de diagnóstico** (métodos en FrameProcessor):
-- `getLastFrameBitmap()`: Frame completo en color
-- `getRegionCrop(left, top, right, bottom)`: Crop arbitrario
-- `getRoiCrop(roi)`: Crop del ROI global
-
-**Uso**: Permite verificar visualmente qué región analiza el sistema y qué colores detecta.
+#### Nota sobre baseline OK previo
+El baseline manual de estado OK (implementado en iteración anterior) sigue disponible pero está **marcado como legacy**. El nuevo modo de entrenamiento supervisado es el enfoque preferido para construir referencias visuales, ya que permite:
+- Múltiples clases (no solo "OK")
+- Mayor cantidad de muestras por clase (50 vs 10)
+- Organización por carpetas más clara
+- Preparación directa para clasificación supervisada
 
 ---
 
-### Fase PREVIA CERRADA: Corrección de bugs críticos
+### Fases PREVIAS CERRADAS
 
-**Fecha de cierre**: 2026-03-24
-
-Bugs corregidos:
-- Crash al guardar Telegram (companion object lazy)
-- Crash potencial en ROI (UNDEFINED lazy)
-- Orientación forzada landscape
-- ROI no quedaba fijado al soltar (reescritura completa basada en MindaRoiOverlayView)
+- Corrección pipeline cromático (cerrada)
+- Baseline manual OK (cerrada - legacy)
+- Evidencias visuales separadas (cerrada)
 
 ---
 
@@ -119,6 +103,8 @@ Bugs corregidos:
 - **El análisis usa información cromática HSV, no grayscale como señal principal**
 - **Dentro del ROI global, se analiza una subregión activa (60% centro)**
 - **Naranja = obstáculo/atención, Rojo = fallo confirmado** (umbrales provisionales)
+- **Las capturas de evidencia ahora usan pipeline de color corregido (sin artefactos)**
+- **Modo entrenamiento supervisado disponible para construir dataset etiquetado**
 - El selector de ROI usa el patrón probado de MindaVigilante.
 - Telegram se configura manualmente y se prueba antes de usar.
 - Las alertas automáticas tienen cooldown de 60 segundos.
@@ -128,18 +114,18 @@ Bugs corregidos:
 ## Archivos nuevos/modificados en esta iteración
 
 ### Nuevos archivos
-- `detection/ColorFrameData.kt` - Estructura de datos cromáticos HSV
-- `detection/ColorBasedDetector.kt` - Detector basado en color
+- `domain/model/TrainingSample.kt` - Modelo de muestras de entrenamiento (3 clases)
+- `domain/repository/TrainingDatasetRepository.kt` - Interfaz de persistencia dataset
+- `data/local/FileTrainingDatasetRepository.kt` - Implementación persistencia por carpetas
 
 ### Archivos modificados
-- `camera/FrameProcessor.kt` - Generación dual HSV + luminancia
-- `monitoring/MonitoringManager.kt` - Soporte cromático + subregión activa
-- `camera/CameraPreview.kt` - Callback onCameraReadyColor
-- `ui/MainViewModel.kt` - Conexión de flujos cromáticos
-- `MainActivity.kt` - Integración UI
+- `ui/MainViewModel.kt` - Añadido modo entrenamiento completo
+- `MainActivity.kt` - UI de entrenamiento con 3 clases, contadores, gestión
+- `ui/ScreenMode.kt` (implícito) - Añadido modo TRAINING
 
 ## Riesgos y puntos de atención
 
+- **Dataset de entrenamiento**: Solo almacena, sin clasificación automática todavía
 - **Migración en progreso**: FrameData legacy sigue disponible para compatibilidad
 - **Umbrales provisionales**: 5% de píxeles para naranja/rojo pueden necesitar ajuste
 - **Sin lógica temporal compleja**: Persistencia de 20 segundos no implementada aún
@@ -153,24 +139,25 @@ Bugs corregidos:
 - **Android Gradle Plugin**: 8.2.2
 - **Kotlin**: 1.9.22
 - **Estado de build**: ✅ COMPILA CORRECTAMENTE
-- **Warnings actuales**: 4 menores (deprecated durante transición)
+- **Warnings actuales**: 3 menores (deprecated durante transición, parámetro no usado)
 
 ## Siguiente paso técnico recomendado
 
-**Opción A: Detección de naranja**
-- Afinar umbrales con datos reales
+**Opción A: Clasificación basada en dataset entrenado**
+- Implementar comparación de imagen actual contra muestras almacenadas
+- Calcular similitud (histograma, características HSV, etc.)
+- Clasificar automáticamente en OK/OBSTACULO/FALLO
+- Preparar base para detección automática basada en entrenamiento
+
+**Opción B: Detección de naranja persistente**
+- Afinar umbrales con datos reales del dataset
 - Implementar histéresis para evitar oscilaciones
 - Añadir indicador visual de % naranja detectado
 
-**Opción B: Detección de rojo persistente**
+**Opción C: Detección de rojo persistente**
 - Implementar lógica temporal (persistencia 20 segundos)
 - Distinguir rojo temporal vs rojo sostenido
 - Preparar para estado "fallo confirmado"
-
-**Opción C: Mejora de observabilidad**
-- Añadir UI de diagnóstico con crop en tiempo real
-- Mostrar estadísticas HSV en vivo
-- Visualizar subregión activa sobre el ROI
 
 ## Recordatorio de disciplina SDD
 

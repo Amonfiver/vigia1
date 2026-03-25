@@ -1,7 +1,8 @@
 /**
  * Archivo: app/src/main/java/com/vigia/app/ui/MainViewModel.kt
  * Propósito: ViewModel para la pantalla principal de VIGIA1.
- * Responsabilidad principal: Gestionar estado de UI, selección de ROI, configuración Telegram, captura de imagen y coordinar acciones del usuario.
+ * Responsabilidad principal: Gestionar estado de UI, selección de ROI, configuración Telegram, captura de imagen,
+ * coordinar acciones del usuario, baseline manual de estado OK, modo de entrenamiento supervisado y evidencias visuales separadas.
  * Alcance: Capa de presentación, lógica de la pantalla principal.
  *
  * Decisiones técnicas relevantes:
@@ -10,41 +11,59 @@
  * - Inyección de dependencias mediante constructor para testabilidad
  * - Uso de MonitoringManager para gestión del estado de vigilancia y análisis
  * - Persistencia de ROI y TelegramConfig mediante repositorios (DataStore)
+ * - Persistencia de baseline OK mediante FileOkBaselineRepository
+ * - Persistencia de dataset de entrenamiento mediante FileTrainingDatasetRepository
+ * - Modo de entrenamiento supervisado con tres clases: OK, OBSTACULO, FALLO
  * - Observación de resultados de detección para mostrar en UI
  * - Conexión del flujo de frames de cámara al MonitoringManager
- * - Referencia a FrameProcessor para captura de imagen bajo demanda
+ * - Referencia a FrameProcessor para captura de imagen bajo demanda y evidencias visuales
  * - AlertManager para alertas automáticas basadas en detección
+ * - Estado de baseline OK: captura, conteo, reset
+ * - Estado de entrenamiento: selección de clase, captura de muestras, contadores por clase
+ * - Estado de evidencias visuales separadas: referencia actual, último evento, última confirmación
  *
  * Limitaciones temporales del MVP:
  * - Lógica de detección usa luminancia simple (FrameData real pero análisis básico)
  * - Sin manejo avanzado de errores de red
  * - Alerta automática implementada con cooldown de 60 segundos
  * - Confirmación diferida a 3 minutos implementada (se pierde si app se cierra)
+ * - Baseline OK solo almacena imágenes, sin análisis automático de ellas todavía
+ * - Dataset de entrenamiento solo almacena, sin clasificación automática todavía
  *
  * Cambios recientes:
- * - Añadida gestión completa de configuración de Telegram (guardar, cargar, probar)
- * - Implementada prueba manual de envío con feedback de resultado
- * - Añadida funcionalidad de captura y envío manual de imagen
- * - Estados de UI para captura de imagen: loading, success, error
- * - INTEGRACIÓN: AlertManager conectado para alertas automáticas al detectar cambios
- * - Estado de alerta automática añadido a la UI
- * - INTEGRACIÓN: Estado de confirmación diferida (3 minutos) en UI
- * - Cancelación de confirmación al detener vigilancia
+ * - AÑADIDO: Modo de entrenamiento supervisado manual con tres clases (OK, OBSTACULO, FALLO)
+ * - AÑADIDO: Dataset local etiquetado con contadores por clase
+ * - AÑADIDO: UI de captura de muestras de entrenamiento
+ * - AÑADIDO: Baseline manual de estado OK (captura, almacenamiento, conteo, reset)
+ * - AÑADIDO: Evidencias visuales separadas (referencia actual, último evento, última confirmación)
+ * - CORREGIDO: Pipeline de captura en color ya no tiene artefactos verde/magenta
+ * - MANTENIDO: Compatibilidad con todas las funcionalidades previas
  */
 package com.vigia.app.ui
 
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vigia.app.alert.AlertManager
 import com.vigia.app.alert.AlertState
 import com.vigia.app.alert.ConfirmationState
 import com.vigia.app.camera.FrameProcessor
+import com.vigia.app.data.local.FileOkBaselineRepository
+import com.vigia.app.data.local.FileTrainingDatasetRepository
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
-import com.vigia.app.domain.model.TelegramConfig
+import com.vigia.app.domain.model.ClassLabel
+import com.vigia.app.domain.model.OkBaselineSample
+import com.vigia.app.domain.model.OkBaselineState
 import com.vigia.app.domain.model.Roi
+import com.vigia.app.domain.model.TelegramConfig
+import com.vigia.app.domain.model.TrainingCaptureState
+import com.vigia.app.domain.model.TrainingDatasetState
+import com.vigia.app.domain.model.TrainingSample
+import com.vigia.app.domain.repository.OkBaselineRepository
 import com.vigia.app.domain.repository.RoiRepository
 import com.vigia.app.domain.repository.TelegramConfigRepository
+import com.vigia.app.domain.repository.TrainingDatasetRepository
 import com.vigia.app.monitoring.MonitoringManager
 import com.vigia.app.telegram.TelegramResult
 import com.vigia.app.telegram.TelegramService
@@ -59,7 +78,8 @@ import kotlinx.coroutines.launch
  */
 enum class ScreenMode {
     NORMAL,           // Vista normal con preview y controles
-    ROI_SELECTION     // Modo de selección de ROI
+    ROI_SELECTION,    // Modo de selección de ROI
+    TRAINING          // NUEVO: Modo de entrenamiento supervisado
 }
 
 /**
@@ -84,19 +104,30 @@ sealed class ImageCaptureState {
 }
 
 /**
+ * Estado del baseline manual de estado OK.
+ */
+sealed class OkBaselineCaptureState {
+    object Idle : OkBaselineCaptureState()
+    object Capturing : OkBaselineCaptureState()
+    object Saving : OkBaselineCaptureState()
+    data class Success(val message: String) : OkBaselineCaptureState()
+    data class Error(val message: String) : OkBaselineCaptureState()
+}
+
+/**
+ * Estado de las evidencias visuales separadas para observabilidad.
+ */
+data class VisualEvidenceState(
+    val referenceCrop: Bitmap? = null,
+    val lastEventCrop: Bitmap? = null,
+    val lastConfirmationCrop: Bitmap? = null,
+    val referenceTimestamp: Long = 0,
+    val lastEventTimestamp: Long = 0,
+    val lastConfirmationTimestamp: Long = 0
+)
+
+/**
  * Estado de la UI de la pantalla principal.
- *
- * @property screenMode Modo actual de la pantalla (normal o selección ROI)
- * @property isMonitoring Indica si la vigilancia está activa
- * @property statusMessage Mensaje de estado mostrado al usuario
- * @property telegramConfig Configuración actual de Telegram (puede ser null)
- * @property currentRoi ROI actualmente seleccionado (persistido o temporal)
- * @property hasRoi Indica si hay un ROI guardado persistentemente
- * @property detectionResult Último resultado de detección (null si no hay análisis)
- * @property telegramTestState Estado de la prueba de Telegram
- * @property imageCaptureState Estado de la captura y envío de imagen
- * @property alertState Estado de la última alerta automática
- * @property confirmationState Estado de la confirmación diferida (3 minutos)
  */
 data class MainUiState(
     val screenMode: ScreenMode = ScreenMode.NORMAL,
@@ -109,20 +140,27 @@ data class MainUiState(
     val telegramTestState: TelegramTestState = TelegramTestState.Idle,
     val imageCaptureState: ImageCaptureState = ImageCaptureState.Idle,
     val alertState: AlertState = AlertState.Idle,
-    val confirmationState: ConfirmationState = ConfirmationState.Idle
+    val confirmationState: ConfirmationState = ConfirmationState.Idle,
+    // Baseline OK
+    val okBaselineState: OkBaselineState = OkBaselineState(),
+    val okBaselineCaptureState: OkBaselineCaptureState = OkBaselineCaptureState.Idle,
+    val okBaselineCount: Int = 0,
+    // Entrenamiento supervisado
+    val trainingDatasetState: TrainingDatasetState = TrainingDatasetState(),
+    val trainingCaptureState: TrainingCaptureState = TrainingCaptureState.Idle,
+    val selectedTrainingClass: ClassLabel = ClassLabel.OK,
+    // Evidencias visuales
+    val visualEvidenceState: VisualEvidenceState = VisualEvidenceState()
 )
 
 /**
  * ViewModel para la pantalla principal de VIGIA.
- *
- * @param roiRepository Repositorio para persistencia de ROI
- * @param telegramConfigRepository Repositorio para configuración de Telegram
- * @param monitoringManager Gestor del estado de monitorización
- * @param alertManager Gestor de alertas automáticas
  */
 class MainViewModel(
     private val roiRepository: RoiRepository? = null,
     private val telegramConfigRepository: TelegramConfigRepository? = null,
+    private val okBaselineRepository: OkBaselineRepository? = null,
+    private val trainingDatasetRepository: TrainingDatasetRepository? = null,
     private val monitoringManager: MonitoringManager = MonitoringManager(),
     private val alertManager: AlertManager = AlertManager()
 ) : ViewModel() {
@@ -130,38 +168,34 @@ class MainViewModel(
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
-    // Referencia al procesador de frames para captura de imagen
     private var frameProcessor: FrameProcessor? = null
 
     init {
         loadSavedData()
-        
-        // Observar cambios en el estado de monitorización
+        setupObservers()
+    }
+
+    private fun setupObservers() {
         viewModelScope.launch {
             monitoringManager.isMonitoring.collect { isMonitoring ->
                 _uiState.update { currentState ->
                     currentState.copy(
                         isMonitoring = isMonitoring,
-                        statusMessage = if (isMonitoring) {
-                            "Monitorización activa"
-                        } else {
-                            "Monitorización detenida"
-                        }
+                        statusMessage = if (isMonitoring) "Monitorización activa" else "Monitorización detenida"
                     )
                 }
             }
         }
 
-        // Observar resultados de detección y enviar a alertas automáticas
         viewModelScope.launch {
             monitoringManager.detectionResult.collect { result ->
                 _uiState.update { currentState ->
                     currentState.copy(detectionResult = result)
                 }
-                
-                // Si hay resultado válido y monitoring activo, procesar alerta
+                updateReferenceEvidence()
                 result?.let { detectionResult ->
-                    if (monitoringManager.isMonitoring.value) {
+                    if (monitoringManager.isMonitoring.value && detectionResult.hasChange) {
+                        captureEventEvidence()
                         alertManager.onDetectionResult(
                             detectionResult = detectionResult,
                             telegramConfig = _uiState.value.telegramConfig,
@@ -172,104 +206,127 @@ class MainViewModel(
             }
         }
 
-        // Observar estado de alertas automáticas
         viewModelScope.launch {
             alertManager.alertState.collect { alertState ->
-                _uiState.update { currentState ->
-                    currentState.copy(alertState = alertState)
-                }
+                _uiState.update { currentState -> currentState.copy(alertState = alertState) }
             }
         }
 
-        // Observar estado de confirmación diferida
         viewModelScope.launch {
             alertManager.confirmationState.collect { confirmationState ->
                 _uiState.update { currentState ->
                     currentState.copy(confirmationState = confirmationState)
                 }
+                if (confirmationState is ConfirmationState.Success) {
+                    captureConfirmationEvidence()
+                }
             }
         }
     }
 
-    /**
-     * Conecta el flujo de frames de la cámara al sistema de monitorización.
-     * Versión actualizada para soporte cromático.
-     *
-     * @param colorFrameDataFlow StateFlow que emite ColorFrameData procesados
-     * @param frameDataFlow StateFlow legacy para compatibilidad (puede ser null)
-     * @param processor FrameProcessor para captura de imagen
-     */
+    private fun loadSavedData() {
+        viewModelScope.launch {
+            val savedRoi = roiRepository?.getRoi()
+            val hasSavedRoi = roiRepository?.hasRoi() ?: false
+            val telegramConfig = telegramConfigRepository?.getConfig()
+            val baselineState = okBaselineRepository?.getBaselineState() ?: OkBaselineState()
+            val baselineCount = okBaselineRepository?.getSampleCount() ?: 0
+            val trainingState = trainingDatasetRepository?.getDatasetState() ?: TrainingDatasetState()
+
+            _uiState.update { currentState ->
+                currentState.copy(
+                    currentRoi = savedRoi,
+                    hasRoi = hasSavedRoi,
+                    telegramConfig = telegramConfig,
+                    okBaselineState = baselineState,
+                    okBaselineCount = baselineCount,
+                    trainingDatasetState = trainingState
+                )
+            }
+        }
+    }
+
+    // ==================== CÁMARA Y EVIDENCIAS ====================
+
     fun connectCamera(
         colorFrameDataFlow: StateFlow<com.vigia.app.detection.ColorFrameData?>,
         frameDataFlow: StateFlow<FrameData?>? = null,
         processor: FrameProcessor
     ) {
         this.frameProcessor = processor
-        
-        // Conectar flujo cromático principal
         monitoringManager.connectColorFrames(colorFrameDataFlow)
-        
-        // Conectar flujo legacy si se proporciona (compatibilidad)
-        frameDataFlow?.let {
-            monitoringManager.connectCameraFrames(it)
-        }
+        frameDataFlow?.let { monitoringManager.connectCameraFrames(it) }
+        updateReferenceEvidence()
     }
 
-    /**
-     * Método legacy para compatibilidad.
-     * @deprecated Usar connectCamera con ColorFrameData
-     */
-    @Deprecated("Usar connectCamera con ColorFrameData para análisis cromático")
+    @Deprecated("Usar connectCamera con ColorFrameData")
     fun connectCameraLegacy(frameDataFlow: StateFlow<FrameData?>, processor: FrameProcessor) {
         this.frameProcessor = processor
         monitoringManager.connectCameraFrames(frameDataFlow)
     }
 
-    /**
-     * Carga datos guardados al inicializar.
-     * Recupera el ROI persistido y la configuración de Telegram.
-     */
-    private fun loadSavedData() {
-        viewModelScope.launch {
-            val savedRoi = roiRepository?.getRoi()
-            val hasSavedRoi = roiRepository?.hasRoi() ?: false
-            val telegramConfig = telegramConfigRepository?.getConfig()
-
-            _uiState.update { currentState ->
-                currentState.copy(
-                    currentRoi = savedRoi,
-                    hasRoi = hasSavedRoi,
-                    telegramConfig = telegramConfig
+    private fun updateReferenceEvidence() {
+        val processor = frameProcessor ?: return
+        val roi = _uiState.value.currentRoi ?: return
+        val crop = processor.getRoiCrop(roi) ?: return
+        
+        _uiState.update { currentState ->
+            currentState.copy(
+                visualEvidenceState = currentState.visualEvidenceState.copy(
+                    referenceCrop = crop,
+                    referenceTimestamp = System.currentTimeMillis()
                 )
-            }
+            )
         }
     }
 
-    /**
-     * Entra en modo de selección de ROI.
-     */
+    private fun captureEventEvidence() {
+        val processor = frameProcessor ?: return
+        val roi = _uiState.value.currentRoi ?: return
+        val crop = processor.getRoiCrop(roi) ?: return
+        
+        _uiState.update { currentState ->
+            currentState.copy(
+                visualEvidenceState = currentState.visualEvidenceState.copy(
+                    lastEventCrop = crop,
+                    lastEventTimestamp = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    private fun captureConfirmationEvidence() {
+        val processor = frameProcessor ?: return
+        val roi = _uiState.value.currentRoi ?: return
+        val crop = processor.getRoiCrop(roi) ?: return
+        
+        _uiState.update { currentState ->
+            currentState.copy(
+                visualEvidenceState = currentState.visualEvidenceState.copy(
+                    lastConfirmationCrop = crop,
+                    lastConfirmationTimestamp = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    // ==================== NAVEGACIÓN Y MODOS ====================
+
     fun enterRoiSelectionMode() {
         _uiState.update { it.copy(screenMode = ScreenMode.ROI_SELECTION) }
     }
 
-    /**
-     * Sale del modo de selección de ROI y vuelve a la vista normal.
-     */
-    fun exitRoiSelectionMode() {
+    fun enterTrainingMode() {
+        _uiState.update { it.copy(screenMode = ScreenMode.TRAINING) }
+    }
+
+    fun exitToNormalMode() {
         _uiState.update { it.copy(screenMode = ScreenMode.NORMAL) }
     }
 
-    /**
-     * Confirma un ROI seleccionado y lo guarda persistentemente.
-     *
-     * @param roi ROI seleccionado por el usuario
-     */
     fun confirmRoiSelection(roi: Roi) {
         viewModelScope.launch {
-            // Guardar en persistencia
             roiRepository?.saveRoi(roi)
-            
-            // Actualizar estado de UI
             _uiState.update { currentState ->
                 currentState.copy(
                     currentRoi = roi,
@@ -277,39 +334,27 @@ class MainViewModel(
                     screenMode = ScreenMode.NORMAL
                 )
             }
+            updateReferenceEvidence()
         }
     }
 
-    /**
-     * Cancela la selección de ROI actual y vuelve a la vista normal.
-     */
     fun cancelRoiSelection() {
         _uiState.update { it.copy(screenMode = ScreenMode.NORMAL) }
     }
 
-    /**
-     * Inicia la vigilancia con el ROI actual.
-     */
+    // ==================== VIGILANCIA ====================
+
     fun startMonitoring() {
-        val roi = _uiState.value.currentRoi
-        monitoringManager.startMonitoring(roi)
+        monitoringManager.startMonitoring(_uiState.value.currentRoi)
     }
 
-    /**
-     * Detiene la vigilancia.
-     */
     fun stopMonitoring() {
         monitoringManager.stopMonitoring()
-        // Cancelar confirmación programada si existe
         alertManager.cancelConfirmation()
     }
 
-    /**
-     * Guarda la configuración de Telegram.
-     *
-     * @param botToken Token del bot
-     * @param chatId ID del chat
-     */
+    // ==================== TELEGRAM ====================
+
     fun saveTelegramConfig(botToken: String, chatId: String) {
         viewModelScope.launch {
             try {
@@ -317,18 +362,13 @@ class MainViewModel(
                 telegramConfigRepository?.saveConfig(config)
                 _uiState.update { it.copy(telegramConfig = config) }
             } catch (e: IllegalArgumentException) {
-                // Datos inválidos, no guardar
                 _uiState.update { it.copy(telegramTestState = TelegramTestState.Error("Datos inválidos")) }
             }
         }
     }
 
-    /**
-     * Realiza una prueba manual de envío de mensaje a Telegram.
-     */
     fun testTelegramConnection() {
         val config = _uiState.value.telegramConfig
-        
         if (config == null || !config.isValid()) {
             _uiState.update { it.copy(telegramTestState = TelegramTestState.Error("Configuración incompleta")) }
             return
@@ -336,37 +376,24 @@ class MainViewModel(
 
         viewModelScope.launch {
             _uiState.update { it.copy(telegramTestState = TelegramTestState.Loading) }
-            
             val service = TelegramService(config)
-            val result = service.sendMessage("🧪 <b>Prueba de VIGIA</b>\n\nConexión configurada correctamente.\n\nSi recibes este mensaje, el bot está funcionando.")
+            val result = service.sendMessage("🧪 <b>Prueba de VIGIA</b>\n\nConexión configurada correctamente.")
             
             _uiState.update { currentState ->
                 when (result) {
-                    is TelegramResult.Success -> {
-                        currentState.copy(telegramTestState = TelegramTestState.Success(result.message))
-                    }
-                    is TelegramResult.Error -> {
-                        currentState.copy(telegramTestState = TelegramTestState.Error(result.message))
-                    }
+                    is TelegramResult.Success -> currentState.copy(telegramTestState = TelegramTestState.Success(result.message))
+                    is TelegramResult.Error -> currentState.copy(telegramTestState = TelegramTestState.Error(result.message))
                 }
             }
         }
     }
 
-    /**
-     * Limpia el estado de la prueba de Telegram.
-     */
     fun clearTelegramTestState() {
         _uiState.update { it.copy(telegramTestState = TelegramTestState.Idle) }
     }
 
-    /**
-     * Captura la imagen actual y la envía a Telegram de forma manual.
-     * Este método es llamado por acción manual del usuario.
-     */
     fun captureAndSendImage() {
         val config = _uiState.value.telegramConfig
-        
         if (config == null || !config.isValid()) {
             _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Error("Configuración de Telegram incompleta")) }
             return
@@ -380,8 +407,6 @@ class MainViewModel(
 
         viewModelScope.launch {
             _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Capturing) }
-            
-            // Capturar imagen
             val imageBytes = processor.getLastFrameJpegBytes()
             
             if (imageBytes == null) {
@@ -390,65 +415,296 @@ class MainViewModel(
             }
 
             _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Sending) }
-            
-            // Enviar imagen a Telegram
             val service = TelegramService(config)
-            val result = service.sendImage(
-                imageData = imageBytes,
-                caption = "📸 Captura manual desde VIGIA"
-            )
+            val result = service.sendImage(imageData = imageBytes, caption = "📸 Captura manual desde VIGIA")
             
             _uiState.update { currentState ->
                 when (result) {
-                    is TelegramResult.Success -> {
-                        currentState.copy(imageCaptureState = ImageCaptureState.Success("Imagen enviada correctamente"))
-                    }
-                    is TelegramResult.Error -> {
-                        currentState.copy(imageCaptureState = ImageCaptureState.Error(result.message))
-                    }
+                    is TelegramResult.Success -> currentState.copy(imageCaptureState = ImageCaptureState.Success("Imagen enviada correctamente"))
+                    is TelegramResult.Error -> currentState.copy(imageCaptureState = ImageCaptureState.Error(result.message))
                 }
             }
         }
     }
 
-    /**
-     * Limpia el estado de captura de imagen.
-     */
     fun clearImageCaptureState() {
         _uiState.update { it.copy(imageCaptureState = ImageCaptureState.Idle) }
     }
 
+    // ==================== MODO ENTRENAMIENTO SUPERVISADO ====================
+
     /**
-     * Verifica si hay un ROI seleccionado actualmente.
-     *
-     * @return true si hay ROI seleccionado (persistido o en memoria)
+     * Selecciona la clase actual para captura de muestras de entrenamiento.
      */
-    fun hasCurrentRoi(): Boolean {
-        return _uiState.value.currentRoi != null
+    fun selectTrainingClass(label: ClassLabel) {
+        _uiState.update { it.copy(selectedTrainingClass = label) }
     }
 
     /**
-     * Verifica si la configuración de Telegram está completa.
-     *
-     * @return true si hay configuración válida
+     * Captura una muestra de entrenamiento para la clase seleccionada.
      */
-    fun hasTelegramConfig(): Boolean {
-        return _uiState.value.telegramConfig?.isValid() ?: false
+    fun captureTrainingSample() {
+        val processor = frameProcessor
+        if (processor == null) {
+            _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Cámara no inicializada")) }
+            return
+        }
+
+        val roi = _uiState.value.currentRoi
+        if (roi == null) {
+            _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Defina un ROI primero")) }
+            return
+        }
+
+        val repository = trainingDatasetRepository
+        if (repository == null) {
+            _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Repositorio no disponible")) }
+            return
+        }
+
+        val selectedClass = _uiState.value.selectedTrainingClass
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Capturing) }
+
+            // Verificar límite de muestras
+            val currentCount = repository.getSampleCount(selectedClass)
+            if (currentCount >= TrainingSample.MAX_SAMPLES_PER_CLASS) {
+                _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Límite de ${TrainingSample.MAX_SAMPLES_PER_CLASS} muestras alcanzado para ${selectedClass.name}")) }
+                return@launch
+            }
+
+            // Capturar crop del ROI
+            val cropBitmap = processor.getRoiCrop(roi)
+            if (cropBitmap == null) {
+                _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("No se pudo capturar el crop")) }
+                return@launch
+            }
+
+            _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Saving) }
+
+            // Convertir a JPEG
+            val jpegBytes = bitmapToJpeg(cropBitmap)
+            if (jpegBytes == null) {
+                _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Error al convertir imagen")) }
+                return@launch
+            }
+
+            // Crear muestra
+            val sampleId = repository.generateSampleId(selectedClass)
+            val sample = TrainingSample(
+                id = sampleId,
+                label = selectedClass,
+                timestamp = System.currentTimeMillis(),
+                imageData = jpegBytes,
+                roi = roi,
+                subRegion = TrainingSample.SubRegionInfo(
+                    left = 0.2f,
+                    top = 0.28f,
+                    right = 0.8f,
+                    bottom = 0.72f,
+                    description = "Subregión activa (60% centro)"
+                )
+            )
+
+            // Guardar
+            val success = repository.saveSample(sample)
+
+            if (success) {
+                // Recargar estado
+                val newState = repository.getDatasetState()
+                val newCount = repository.getSampleCount(selectedClass)
+                
+                _uiState.update { currentState ->
+                    currentState.copy(
+                        trainingDatasetState = newState,
+                        trainingCaptureState = TrainingCaptureState.Success(
+                            "Muestra guardada: ${selectedClass.name} ($newCount/${TrainingSample.MAX_SAMPLES_PER_CLASS})"
+                        )
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Error al guardar la muestra")) }
+            }
+        }
     }
 
     /**
-     * Limpia el estado de la alerta automática.
+     * Reinicia/elimina todas las muestras de una clase específica.
      */
-    fun clearAlertState() {
-        alertManager.clearState()
+    fun clearTrainingClass(label: ClassLabel) {
+        val repository = trainingDatasetRepository ?: return
+        
+        viewModelScope.launch {
+            val success = repository.clearSamplesByLabel(label)
+            
+            if (success) {
+                val newState = repository.getDatasetState()
+                _uiState.update { currentState ->
+                    currentState.copy(
+                        trainingDatasetState = newState,
+                        trainingCaptureState = TrainingCaptureState.Success("Clase ${label.name} reiniciada")
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Error al reiniciar clase ${label.name}")) }
+            }
+        }
     }
 
     /**
-     * Limpia el estado de la confirmación.
+     * Reinicia/elimina todo el dataset de entrenamiento.
      */
-    fun clearConfirmationState() {
-        alertManager.clearConfirmationState()
+    fun clearAllTrainingData() {
+        val repository = trainingDatasetRepository ?: return
+        
+        viewModelScope.launch {
+            val success = repository.clearAllSamples()
+            
+            if (success) {
+                _uiState.update { currentState ->
+                    currentState.copy(
+                        trainingDatasetState = TrainingDatasetState(),
+                        trainingCaptureState = TrainingCaptureState.Success("Dataset de entrenamiento reiniciado")
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Error al reiniciar dataset")) }
+            }
+        }
     }
+
+    /**
+     * Recarga el estado del dataset desde el repositorio.
+     */
+    fun refreshTrainingDatasetState() {
+        val repository = trainingDatasetRepository ?: return
+        
+        viewModelScope.launch {
+            val state = repository.getDatasetState()
+            _uiState.update { currentState ->
+                currentState.copy(trainingDatasetState = state)
+            }
+        }
+    }
+
+    /**
+     * Limpia el estado de captura de entrenamiento.
+     */
+    fun clearTrainingCaptureState() {
+        _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Idle) }
+    }
+
+    // ==================== BASELINE OK (LEGACY) ====================
+
+    fun captureOkBaselineSample() {
+        val processor = frameProcessor
+        if (processor == null) {
+            _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Error("Cámara no inicializada")) }
+            return
+        }
+
+        val roi = _uiState.value.currentRoi
+        if (roi == null) {
+            _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Error("Defina un ROI primero")) }
+            return
+        }
+
+        val repository = okBaselineRepository
+        if (repository == null) {
+            _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Error("Repositorio no disponible")) }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Capturing) }
+            val cropBitmap = processor.getRoiCrop(roi)
+            
+            if (cropBitmap == null) {
+                _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Error("No se pudo capturar el crop")) }
+                return@launch
+            }
+
+            _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Saving) }
+            val jpegBytes = bitmapToJpeg(cropBitmap)
+            
+            if (jpegBytes == null) {
+                _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Error("Error al convertir imagen")) }
+                return@launch
+            }
+
+            val nextIndex = _uiState.value.okBaselineState.nextIndex()
+            if (nextIndex == null) {
+                _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Error("Límite de 10 muestras alcanzado")) }
+                return@launch
+            }
+
+            val sample = OkBaselineSample(
+                index = nextIndex,
+                timestamp = System.currentTimeMillis(),
+                imageData = jpegBytes,
+                roi = roi,
+                subRegion = OkBaselineSample.SubRegionInfo(
+                    left = 0.2f, top = 0.28f, right = 0.8f, bottom = 0.72f,
+                    description = "Subregión activa (60% centro)"
+                )
+            )
+
+            val success = repository.saveSample(sample)
+            if (success) {
+                val newState = repository.getBaselineState()
+                val newCount = repository.getSampleCount()
+                _uiState.update { currentState ->
+                    currentState.copy(
+                        okBaselineState = newState,
+                        okBaselineCount = newCount,
+                        okBaselineCaptureState = OkBaselineCaptureState.Success("Muestra $nextIndex/${OkBaselineSample.MAX_SAMPLES} guardada")
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Error("Error al guardar")) }
+            }
+        }
+    }
+
+    fun resetOkBaseline() {
+        val repository = okBaselineRepository ?: return
+        viewModelScope.launch {
+            val success = repository.clearAllSamples()
+            if (success) {
+                _uiState.update { currentState ->
+                    currentState.copy(
+                        okBaselineState = OkBaselineState(),
+                        okBaselineCount = 0,
+                        okBaselineCaptureState = OkBaselineCaptureState.Success("Baseline reiniciado")
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearOkBaselineCaptureState() {
+        _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Idle) }
+    }
+
+    // ==================== UTILIDADES ====================
+
+    private fun bitmapToJpeg(bitmap: Bitmap, quality: Int = 90): ByteArray? {
+        return try {
+            val stream = java.io.ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+            stream.toByteArray()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    fun hasCurrentRoi(): Boolean = _uiState.value.currentRoi != null
+    fun hasTelegramConfig(): Boolean = _uiState.value.telegramConfig?.isValid() ?: false
+
+    fun clearAlertState() = alertManager.clearState()
+    fun clearConfirmationState() = alertManager.clearConfirmationState()
 
     override fun onCleared() {
         super.onCleared()
