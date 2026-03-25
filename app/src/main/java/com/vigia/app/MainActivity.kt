@@ -222,6 +222,18 @@ fun NormalModeContent(
             onEnterTraining = { viewModel.enterTrainingMode() }
         )
 
+        // Sección de clasificación automática (visible durante vigilancia)
+        if (uiState.isMonitoring) {
+            ClassificationSection(
+                classificationResult = uiState.classificationResult,
+                datasetSyncStatus = uiState.datasetSyncStatus,
+                datasetStats = uiState.datasetStats,
+                cacheStats = uiState.cacheStats,
+                onResync = { viewModel.forceResyncDataset() },
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
+
         // Sección de alertas automáticas
         if (uiState.isMonitoring) {
             AutoAlertSection(
@@ -1220,6 +1232,259 @@ fun AutoAlertSection(
                     }
                 }
                 else -> {}
+            }
+        }
+    }
+}
+
+/**
+ * Sección de clasificación automática en tiempo real.
+ * Muestra la clase estimada, confianza, scores por clase y estado del dataset.
+ */
+@Composable
+fun ClassificationSection(
+    classificationResult: com.vigia.app.classification.ClassificationResult?,
+    datasetSyncStatus: com.vigia.app.monitoring.DatasetSyncUiState,
+    datasetStats: com.vigia.app.classification.DatasetStats,
+    cacheStats: com.vigia.app.classification.CacheStats?,
+    onResync: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Determinar color según la clase predicha
+    val predictedClassColor = when (classificationResult?.predictedClass) {
+        com.vigia.app.domain.model.ClassLabel.OK -> Color(0xFF4CAF50)      // Verde
+        com.vigia.app.domain.model.ClassLabel.OBSTACULO -> Color(0xFFFF9800) // Naranja
+        com.vigia.app.domain.model.ClassLabel.FALLO -> Color(0xFFF44336)   // Rojo
+        else -> MaterialTheme.colorScheme.outline
+    }
+
+    // Determinar emoji según la clase
+    val predictedClassEmoji = when (classificationResult?.predictedClass) {
+        com.vigia.app.domain.model.ClassLabel.OK -> "✓"
+        com.vigia.app.domain.model.ClassLabel.OBSTACULO -> "⚠️"
+        com.vigia.app.domain.model.ClassLabel.FALLO -> "🚨"
+        else -> "?"
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                classificationResult == null -> MaterialTheme.colorScheme.surfaceVariant
+                else -> predictedClassColor.copy(alpha = 0.1f)
+            }
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 2.dp,
+            color = predictedClassColor
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Título y estado de sincronización
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "🎯 Clasificación",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                // Indicador de estado de sincronización
+                when (datasetSyncStatus) {
+                    com.vigia.app.monitoring.DatasetSyncUiState.SYNCED -> {
+                        Text(
+                            text = "✓ Sync",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF4CAF50)
+                        )
+                    }
+                    com.vigia.app.monitoring.DatasetSyncUiState.SYNCING -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.dp
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Sync...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    com.vigia.app.monitoring.DatasetSyncUiState.STALE -> {
+                        Text(
+                            text = "⚠ Stale",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFFF9800)
+                        )
+                    }
+                    com.vigia.app.monitoring.DatasetSyncUiState.EMPTY -> {
+                        Text(
+                            text = "✗ Empty",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Clase estimada principal
+            if (classificationResult != null && datasetSyncStatus == com.vigia.app.monitoring.DatasetSyncUiState.SYNCED) {
+                // Emoji grande y clase
+                Text(
+                    text = "$predictedClassEmoji ${classificationResult.predictedClass.name}",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = predictedClassColor
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Barra de confianza
+                val confidencePercent = (classificationResult.confidence * 100).toInt()
+                LinearProgressIndicator(
+                    progress = classificationResult.confidence,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp),
+                    color = predictedClassColor,
+                    trackColor = predictedClassColor.copy(alpha = 0.2f)
+                )
+                Text(
+                    text = "Confianza: $confidencePercent%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Scores por clase
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    classificationResult.classScores.forEach { (label, score) ->
+                        val scoreColor = when (label) {
+                            com.vigia.app.domain.model.ClassLabel.OK -> Color(0xFF4CAF50)
+                            com.vigia.app.domain.model.ClassLabel.OBSTACULO -> Color(0xFFFF9800)
+                            com.vigia.app.domain.model.ClassLabel.FALLO -> Color(0xFFF44336)
+                        }
+                        val scorePercent = (score * 100).toInt()
+                        
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = label.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scoreColor,
+                                modifier = Modifier.width(80.dp)
+                            )
+                            LinearProgressIndicator(
+                                progress = score,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(6.dp),
+                                color = scoreColor,
+                                trackColor = scoreColor.copy(alpha = 0.2f)
+                            )
+                            Text(
+                                text = "$scorePercent%",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.width(40.dp),
+                                textAlign = TextAlign.End
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Contadores de muestras disponibles
+                cacheStats?.let { stats ->
+                    Text(
+                        text = "Muestras: OK=${stats.okCached} OBST=${stats.obstaculoCached} FALL=${stats.falloCached}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+
+                // Botón de resincronización
+                if (datasetSyncStatus == com.vigia.app.monitoring.DatasetSyncUiState.STALE) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onResync,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("🔄 Resincronizar dataset")
+                    }
+                }
+            } else {
+                // Sin clasificación disponible
+                when (datasetSyncStatus) {
+                    com.vigia.app.monitoring.DatasetSyncUiState.EMPTY -> {
+                        Text(
+                            text = "Sin dataset de entrenamiento",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Text(
+                            text = "Captura muestras en modo entrenamiento",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    com.vigia.app.monitoring.DatasetSyncUiState.SYNCING -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Text(
+                                text = "Sincronizando dataset...",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    com.vigia.app.monitoring.DatasetSyncUiState.STALE -> {
+                        Text(
+                            text = "Dataset desactualizado",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFFFF9800)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = onResync,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🔄 Resincronizar ahora")
+                        }
+                    }
+                    else -> {
+                        Text(
+                            text = "Iniciando clasificación...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
             }
         }
     }

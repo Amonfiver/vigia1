@@ -89,6 +89,33 @@ CameraX → FrameProcessor → ColorFrameData (HSV)
                          MainViewModel → UI
 ```
 
+### Clasificación automática basada en dataset (NUEVO)
+```
+Al iniciar vigilancia:
+MainViewModel.startMonitoring()
+  ↓
+MainViewModel.syncTrainingDatasetWithClassifier()
+  ↓
+MonitoringManager.updateTrainingDataset(samples)
+  ↓
+DatasetClassifier.syncDataset(samples) → Precalcula features
+  ↓
+Cache en memoria: Map<sampleId, CachedSampleFeatures>
+
+Durante vigilancia (cada 500ms):
+FrameProcessor → ColorFrameData
+  ↓
+MonitoringManager.performClassification()
+  ↓
+DatasetClassifier.classify(ColorFrameData)
+  ↓
+Extrae features del frame actual (1 vez)
+  ↓
+Compara contra caché de features (O(n), sin decodificación)
+  ↓
+ClassificationResult → UI (clase, confianza, scores)
+```
+
 ### Alertas automáticas
 ```
 MonitoringManager.detectionResult → MainViewModel
@@ -116,15 +143,27 @@ MonitoringManager.detectionResult → MainViewModel
 - Frecuencia: 1 de cada 5 frames (~6fps)
 
 ### MonitoringManager (monitoring/MonitoringManager.kt)
-- Coordina vigilancia activa + estabilización
+- Coordina vigilancia activa + estabilización + clasificación
 - Análisis cada 500ms usando ColorBasedDetector
 - Subregión activa: 60% centro con sesgo vertical 0.4
 - Estabilización: 3 detecciones consecutivas antes de confirmar
+- **CLASIFICACIÓN AUTOMÁTICA**: Integra DatasetClassifier con sincronización
+- Estado de sincronización: DatasetSyncUiState (EMPTY, SYNCING, SYNCED, STALE)
+- Resincronización: `forceResyncDataset()` para actualizar caché
 
 ### ColorBasedDetector (detection/ColorBasedDetector.kt)
 - Análisis cromático HSV
 - Naranja (Hue 15-35), Rojo (Hue 0-15 o 230-255)
 - Umbral: 5% de píxeles (provisionales)
+
+### DatasetClassifier (classification/DatasetClassifier.kt) - NUEVO
+- Clasificador k-NN (k=3) basado en features HSV
+- **CACHÉ DE FEATURES**: Precalcula features del dataset en sincronización
+- Estructura: `CachedSampleFeatures` almacena features por muestra
+- Método `syncDataset()`: Decodifica JPEGs y precalcula features (costoso, una vez)
+- Método `classify()`: Compara features contra caché (rápido, O(n))
+- Estado: `DatasetSyncStatus` (EMPTY, SYNCED, STALE)
+- Estadísticas: `CacheStats` con contadores por clase
 
 ### MainViewModel (ui/MainViewModel.kt)
 - Gestiona todo el estado de la UI

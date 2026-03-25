@@ -10,14 +10,22 @@
  * - Features: ColorFeatures con histograma HSV + estadísticas + porcentajes cromáticos
  * - Comparación directa contra todas las muestras del dataset (fuerza bruta, sin índices)
  * - Sin dependencias de ML externo, completamente explicable
+ * - CACHE DE FEATURES: Las features del dataset se precalculan y cachean en memoria para evitar
+ *   re-decodificar JPEGs en cada ciclo de clasificación. La caché se invalida cuando cambia el dataset.
  *
  * Estrategia de clasificación:
  * 1. Extraer features de la imagen actual
- * 2. Calcular similitud contra todas las muestras del dataset
+ * 2. Calcular similitud contra todas las muestras del dataset (usando caché de features)
  * 3. Seleccionar top-k muestras más similares
  * 4. Agrupar por clase y calcular score ponderado
  * 5. Decidir clase con mayor score
  * 6. Calcular confianza basada en diferencia entre top clases
+ *
+ * Estrategia de caché:
+ * - La caché es un Map<sampleId, CachedSampleFeatures> que se mantiene en memoria
+ * - Se recalcula solo cuando: (a) se actualiza el dataset, o (b) se fuerza resincronización
+ * - Cada entrada cacheada contiene: ColorFeatures precalculada + metadatos de la muestra
+ * - Durante clasificación online, se compara contra la caché (O(n)) sin decodificación
  *
  * Limitaciones temporales del MVP:
  * - Comparación fuerza bruta O(n) contra todas las muestras (escalable hasta ~150 muestras)
@@ -25,8 +33,12 @@
  * - k fijo en 3, no adaptable
  * - Sin validación cruzada ni métricas de calidad del dataset
  * - Sin manejo de clases desbalanceadas más allá de ponderación
+ * - La caché es en memoria (se pierde al cerrar la app)
  *
  * Cambios recientes:
+ * - AÑADIDO: Caché de features del dataset para evitar re-decodificación en cada ciclo
+ * - AÑADIDO: Estado de sincronización del dataset (SYNCED, STALE, EMPTY)
+ * - AÑADIDO: Método explícito para forzar resincronización
  * - Creación inicial para clasificación automática basada en dataset etiquetado
  */
 package com.vigia.app.classification
@@ -70,6 +82,31 @@ data class ClassMatch(
 )
 
 /**
+ * Features de una muestra cacheadas en memoria.
+ * Evita re-decodificar el JPEG en cada ciclo de clasificación.
+ *
+ * @property sampleId ID único de la muestra
+ * @property label Clase de la muestra
+ * @property features ColorFeatures precalculadas
+ * @property cachedAt Timestamp de cuando se cacheó
+ */
+data class CachedSampleFeatures(
+    val sampleId: String,
+    val label: ClassLabel,
+    val features: ColorFeatures,
+    val cachedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * Estado de sincronización del dataset.
+ */
+enum class DatasetSyncStatus {
+    EMPTY,      // No hay muestras en el dataset
+    SYNCED,     // Dataset cargado y cacheado, listo para clasificar
+    STALE       // Dataset cambió desde última sincronización, necesita recache
+}
+
+/**
  * Clasificador basado en dataset etiquetado usando k-NN.
  *
  * @param k Número de vecinos a considerar (default 3)
@@ -79,46 +116,110 @@ class DatasetClassifier(
     private val k: Int = 3,
     private val minConfidenceThreshold: Float = 0.3f
 ) {
+    // Caché de features del dataset: sampleId -> CachedSampleFeatures
+    private val featuresCache = mutableMapOf<String, CachedSampleFeatures>()
+    
+    // Estado actual de sincronización
+    private var syncStatus: DatasetSyncStatus = DatasetSyncStatus.EMPTY
+    
+    // Referencia al dataset original para estadísticas
+    private var lastDataset: List<TrainingSample> = emptyList()
+
     /**
-     * Clasifica una imagen actual comparándola contra el dataset.
+     * Sincroniza el dataset y precalcula las features en caché.
+     * DEBE llamarse cuando:
+     * - Se inicia la vigilancia y hay un dataset disponible
+     * - Se capturan nuevas muestras de entrenamiento
+     * - Se eliminan muestras del dataset
+     * - El usuario fuerza resincronización manual
+     *
+     * @param dataset Dataset completo de muestras etiquetadas
+     * @return Resultado de la sincronización (éxito y estadísticas)
+     */
+    fun syncDataset(dataset: List<TrainingSample>): SyncResult {
+        if (dataset.isEmpty()) {
+            featuresCache.clear()
+            lastDataset = emptyList()
+            syncStatus = DatasetSyncStatus.EMPTY
+            return SyncResult(success = true, cachedCount = 0, errors = 0, status = syncStatus)
+        }
+
+        var cachedCount = 0
+        var errorCount = 0
+        val newCache = mutableMapOf<String, CachedSampleFeatures>()
+
+        for (sample in dataset) {
+            try {
+                // Intentar reutilizar de la caché existente si la muestra no cambió
+                val existing = featuresCache[sample.id]
+                if (existing != null) {
+                    newCache[sample.id] = existing
+                    cachedCount++
+                    continue
+                }
+
+                // Extraer features de la muestra (decodificando JPEG)
+                val features = extractFeaturesFromSample(sample)
+                
+                newCache[sample.id] = CachedSampleFeatures(
+                    sampleId = sample.id,
+                    label = sample.label,
+                    features = features
+                )
+                cachedCount++
+            } catch (e: Exception) {
+                // Ignorar muestras que no se puedan procesar
+                errorCount++
+            }
+        }
+
+        // Reemplazar caché antigua por la nueva
+        featuresCache.clear()
+        featuresCache.putAll(newCache)
+        lastDataset = dataset
+        syncStatus = if (cachedCount > 0) DatasetSyncStatus.SYNCED else DatasetSyncStatus.EMPTY
+
+        return SyncResult(
+            success = cachedCount > 0,
+            cachedCount = cachedCount,
+            errors = errorCount,
+            status = syncStatus
+        )
+    }
+
+    /**
+     * Clasifica una imagen actual comparándola contra el dataset cacheado.
+     * Esta operación es O(n) pero SOLO compara features (sin decodificación JPEG).
      *
      * @param currentFrame Frame actual con información HSV
-     * @param dataset Muestras etiquetadas del dataset
      * @return Resultado de la clasificación
      */
-    fun classify(
-        currentFrame: ColorFrameData,
-        dataset: List<TrainingSample>
-    ): ClassificationResult {
-        // Extraer features de la imagen actual
+    fun classify(currentFrame: ColorFrameData): ClassificationResult {
+        // Extraer features de la imagen actual (una sola vez por frame)
         val currentFeatures = ColorFeatures.fromColorFrameData(currentFrame)
 
-        // Si no hay muestras en el dataset, retornar resultado de "desconocido"
-        if (dataset.isEmpty()) {
+        // Si no hay caché, no se puede clasificar
+        if (featuresCache.isEmpty()) {
             return ClassificationResult(
                 predictedClass = ClassLabel.OK, // Default conservador
                 confidence = 0f,
                 classScores = emptyMap(),
                 samplesUsed = 0,
                 topMatches = emptyList(),
-                featuresSummary = currentFeatures.summary() + " | Sin muestras en dataset"
+                featuresSummary = currentFeatures.summary() + " | Sin dataset cacheado"
             )
         }
 
-        // Calcular similitud contra todas las muestras
-        val matches = dataset.mapNotNull { sample ->
+        // Calcular similitud contra TODAS las muestras cacheadas (sin decodificación)
+        val matches = featuresCache.values.mapNotNull { cached ->
             try {
-                // Convertir imagen de muestra a ColorFrameData
-                val sampleFeatures = extractFeaturesFromSample(sample)
-                val similarity = currentFeatures.similarityTo(sampleFeatures)
-
+                val similarity = currentFeatures.similarityTo(cached.features)
                 ClassMatch(
-                    label = sample.label,
-                    sampleId = sample.id,
+                    label = cached.label,
+                    sampleId = cached.sampleId,
                     similarity = similarity
                 )
             } catch (e: Exception) {
-                // Ignorar muestras que no se puedan procesar
                 null
             }
         }
@@ -139,38 +240,33 @@ class DatasetClassifier(
             predictedClass = predictedClass,
             confidence = confidence,
             classScores = classScores,
-            samplesUsed = dataset.size,
+            samplesUsed = featuresCache.size,
             topMatches = topK,
             featuresSummary = currentFeatures.summary()
         )
     }
 
     /**
-     * Clasifica usando features ya extraídas (optimización).
+     * Clasifica usando features ya extraídas (optimización para casos especiales).
      */
-    fun classifyWithFeatures(
-        currentFeatures: ColorFeatures,
-        dataset: List<TrainingSample>
-    ): ClassificationResult {
-        if (dataset.isEmpty()) {
+    fun classifyWithFeatures(currentFeatures: ColorFeatures): ClassificationResult {
+        if (featuresCache.isEmpty()) {
             return ClassificationResult(
                 predictedClass = ClassLabel.OK,
                 confidence = 0f,
                 classScores = emptyMap(),
                 samplesUsed = 0,
                 topMatches = emptyList(),
-                featuresSummary = currentFeatures.summary() + " | Sin muestras en dataset"
+                featuresSummary = currentFeatures.summary() + " | Sin dataset cacheado"
             )
         }
 
-        val matches = dataset.mapNotNull { sample ->
+        val matches = featuresCache.values.mapNotNull { cached ->
             try {
-                val sampleFeatures = extractFeaturesFromSample(sample)
-                val similarity = currentFeatures.similarityTo(sampleFeatures)
-
+                val similarity = currentFeatures.similarityTo(cached.features)
                 ClassMatch(
-                    label = sample.label,
-                    sampleId = sample.id,
+                    label = cached.label,
+                    sampleId = cached.sampleId,
                     similarity = similarity
                 )
             } catch (e: Exception) {
@@ -189,7 +285,7 @@ class DatasetClassifier(
             predictedClass = predictedClass,
             confidence = confidence,
             classScores = classScores,
-            samplesUsed = dataset.size,
+            samplesUsed = featuresCache.size,
             topMatches = topK,
             featuresSummary = currentFeatures.summary()
         )
@@ -197,6 +293,7 @@ class DatasetClassifier(
 
     /**
      * Extrae features de una muestra de entrenamiento (decodificando JPEG).
+     * Esta operación es costosa y solo debe hacerse durante sincronización, no en cada clasificación.
      */
     private fun extractFeaturesFromSample(sample: TrainingSample): ColorFeatures {
         // Decodificar JPEG a Bitmap
@@ -270,12 +367,35 @@ class DatasetClassifier(
     }
 
     /**
-     * Verifica si el dataset tiene suficientes muestras para clasificación confiable.
+     * Obtiene el estado actual de sincronización.
      */
-    fun isDatasetReady(dataset: List<TrainingSample>): Boolean {
-        if (dataset.isEmpty()) return false
+    fun getSyncStatus(): DatasetSyncStatus = syncStatus
 
-        val counts = dataset.groupingBy { it.label }.eachCount()
+    /**
+     * Obtiene estadísticas de la caché actual.
+     */
+    fun getCacheStats(): CacheStats {
+        val byClass = featuresCache.values.groupingBy { it.label }.eachCount()
+        return CacheStats(
+            totalCached = featuresCache.size,
+            okCached = byClass[ClassLabel.OK] ?: 0,
+            obstaculoCached = byClass[ClassLabel.OBSTACULO] ?: 0,
+            falloCached = byClass[ClassLabel.FALLO] ?: 0,
+            syncStatus = syncStatus,
+            lastSyncTimestamp = if (featuresCache.isNotEmpty()) {
+                featuresCache.values.maxOf { it.cachedAt }
+            } else 0
+        )
+    }
+
+    /**
+     * Verifica si el dataset tiene suficientes muestras para clasificación confiable.
+     * Requiere al menos 2 clases con 2+ muestras cada una.
+     */
+    fun isDatasetReady(): Boolean {
+        if (featuresCache.isEmpty()) return false
+
+        val counts = featuresCache.values.groupingBy { it.label }.eachCount()
         return counts.size >= 2 && counts.values.all { it >= 2 }
     }
 
@@ -289,8 +409,54 @@ class DatasetClassifier(
             okCount = counts[ClassLabel.OK] ?: 0,
             obstaculoCount = counts[ClassLabel.OBSTACULO] ?: 0,
             falloCount = counts[ClassLabel.FALLO] ?: 0,
-            isReady = isDatasetReady(dataset)
+            isReady = isDatasetReady()
         )
+    }
+
+    /**
+     * Invalida la caché forzando una resincronización en la próxima clasificación.
+     */
+    fun invalidateCache() {
+        syncStatus = DatasetSyncStatus.STALE
+    }
+
+    /**
+     * Limpia completamente la caché.
+     */
+    fun clearCache() {
+        featuresCache.clear()
+        lastDataset = emptyList()
+        syncStatus = DatasetSyncStatus.EMPTY
+    }
+}
+
+/**
+ * Resultado de una operación de sincronización.
+ */
+data class SyncResult(
+    val success: Boolean,
+    val cachedCount: Int,
+    val errors: Int,
+    val status: DatasetSyncStatus
+)
+
+/**
+ * Estadísticas de la caché de features.
+ */
+data class CacheStats(
+    val totalCached: Int,
+    val okCached: Int,
+    val obstaculoCached: Int,
+    val falloCached: Int,
+    val syncStatus: DatasetSyncStatus,
+    val lastSyncTimestamp: Long
+) {
+    fun summary(): String {
+        return "Cache: $totalCached muestras (OK:$okCached, OBST:$obstaculoCached, FALL:$falloCached) - ${when(syncStatus) {
+            DatasetSyncStatus.SYNCED -> "✓ Sincronizado"
+            DatasetSyncStatus.STALE -> "⚠ Desactualizado"
+            DatasetSyncStatus.EMPTY -> "✗ Vacío"
+        }}"
     }
 }
 

@@ -22,77 +22,48 @@ El MVP actual tiene:
 - **BASELINE MANUAL OK: flujo para capturar 5-10 muestras de estado OK del transfer**
 - **EVIDENCIAS VISUALES SEPARADAS: referencia actual, último evento, última confirmación**
 - **MODO ENTRENAMIENTO SUPERVISADO: captura de muestras etiquetadas OK/OBSTACULO/FALLO**
+- **CLASIFICACIÓN AUTOMÁTICA BASADA EN DATASET: UI completa, caché de features, resincronización explícita**
 
 ---
 
 ## Estado actual
 
-### Fase ACTIVA: Modo de entrenamiento supervisado implementado
+### Fase CERRADA: Clasificación automática basada en dataset implementada y usable
 
-**Fecha de inicio**: 2026-03-25
+**Fecha de cierre**: 2026-03-25
 
-Se ha implementado un **modo de entrenamiento supervisado manual** para capturar y almacenar muestras etiquetadas del transfer. Esto permite construir un dataset local que servirá de base para clasificación en iteraciones futuras.
+La fase de clasificación automática basada en dataset está **completamente implementada y usable en dispositivo real**. 
 
-#### Dataset de entrenamiento implementado
+#### Características implementadas
 
-**Tres clases de referencia**:
+**1. UI de clasificación en tiempo real** ✅
+- Visualización explícita de clase estimada (OK/OBSTACULO/FALLO) con colores coherentes:
+  - Verde (#4CAF50) para OK ✓
+  - Naranja (#FF9800) para OBSTÁCULO ⚠️
+  - Rojo (#F44336) para FALLO 🚨
+- Barra de confianza visual (0-100%)
+- Scores por clase con barras de progreso
+- Contadores de muestras por clase disponibles en caché
+- Indicador de estado de sincronización (SYNCED/SYNCING/STALE/EMPTY)
 
-1. **`OK`** - Estado normal / sano / sin incidencia
-   - Color: Verde (#4CAF50)
-   - Icono: ✓
+**2. Caché de features del dataset** ✅
+- **Precálculo de features en sincronización**: Las features HSV se extraen una sola vez al sincronizar
+- **Caché en memoria**: Map<sampleId, CachedSampleFeatures> mantiene features precalculadas
+- **Sin re-decodificación**: Durante clasificación online, solo se comparan features (sin tocar JPEGs)
+- **Rendimiento**: Clasificación O(n) sin operaciones costosas de decodificación
 
-2. **`OBSTACULO`** - Presencia de señal visual naranja / atención inmediata
-   - Color: Naranja (#FF9800)
-   - Icono: ⚠️
+**3. Flujo de resincronización explícita** ✅
+- Estado de sincronización visible: SYNCED (✓), SYNCING (↻), STALE (⚠), EMPTY (✗)
+- Sincronización automática al iniciar vigilancia
+- Botón "Resincronizar dataset" cuando está STALE
+- Método `forceResyncDataset()` para resincronización manual
+- Invalidación automática al capturar/borrar muestras
 
-3. **`FALLO`** - Presencia de señal visual roja / franjas rojas / estado anómalo
-   - Color: Rojo (#F44336)
-   - Icono: 🚨
-
-**Estructura de almacenamiento**:
-- Directorio base: `filesDir/training/`
-- Subdirectorios por clase: `OK/`, `OBSTACULO/`, `FALLO/`
-- Formato: JPEG para imagen, `.meta` para metadatos (texto simple)
-- Límite: 50 muestras por clase (para no saturar almacenamiento)
-- Mínimo recomendado: 5 muestras por clase para entrenamiento básico
-
-**Flujo de uso**:
-1. Usuario define el ROI del transfer
-2. Entra en modo "🎓 Modo Entrenamiento" (desde vista normal)
-3. Selecciona la clase a capturar (OK, OBSTACULO, FALLO)
-4. Captura 5-10+ muestras de esa clase
-5. Cambia de clase y repite el proceso
-6. Visualiza contadores por clase en tiempo real
-7. Puede reiniciar clase específica o todo el dataset
-
-**UI de entrenamiento**:
-- Selector de clase con botones visuales (color + emoji)
-- Contadores por clase (X/50 muestras)
-- Botón de captura con feedback de progreso
-- Mensajes de éxito/error temporales (3 segundos)
-- Botones de gestión: reiniciar clase, reiniciar todo, volver
-
-**Componentes creados**:
-- `domain/model/TrainingSample.kt`: Modelo de datos con ClassLabel enum
-- `domain/repository/TrainingDatasetRepository.kt`: Interfaz de persistencia
-- `data/local/FileTrainingDatasetRepository.kt`: Implementación con archivos
-- `ui/MainViewModel.kt`: Lógica de captura, conteo, gestión
-- `MainActivity.kt`: UI completa del modo entrenamiento
-
-#### Nota sobre baseline OK previo
-El baseline manual de estado OK (implementado en iteración anterior) sigue disponible pero está **marcado como legacy**. El nuevo modo de entrenamiento supervisado es el enfoque preferido para construir referencias visuales, ya que permite:
-- Múltiples clases (no solo "OK")
-- Mayor cantidad de muestras por clase (50 vs 10)
-- Organización por carpetas más clara
-- Preparación directa para clasificación supervisada
-
----
-
-### Fases PREVIAS CERRADAS
-
-- Corrección pipeline cromático (cerrada)
-- Baseline manual OK (cerrada - legacy)
-- Evidencias visuales separadas (cerrada)
+**4. Integración completa** ✅
+- Clasificación visible solo durante vigilancia activa
+- Actualización en tiempo real (cada 500ms)
+- No bloquea la UI ni el flujo de vigilancia
+- Compatible con modo de entrenamiento
 
 ---
 
@@ -105,6 +76,7 @@ El baseline manual de estado OK (implementado en iteración anterior) sigue disp
 - **Naranja = obstáculo/atención, Rojo = fallo confirmado** (umbrales provisionales)
 - **Las capturas de evidencia ahora usan pipeline de color corregido (sin artefactos)**
 - **Modo entrenamiento supervisado disponible para construir dataset etiquetado**
+- **Clasificación automática con caché de features y resincronización explícita**
 - El selector de ROI usa el patrón probado de MindaVigilante.
 - Telegram se configura manualmente y se prueba antes de usar.
 - Las alertas automáticas tienen cooldown de 60 segundos.
@@ -113,25 +85,19 @@ El baseline manual de estado OK (implementado en iteración anterior) sigue disp
 
 ## Archivos nuevos/modificados en esta iteración
 
-### Nuevos archivos
-- `domain/model/TrainingSample.kt` - Modelo de muestras de entrenamiento (3 clases)
-- `domain/repository/TrainingDatasetRepository.kt` - Interfaz de persistencia dataset
-- `data/local/FileTrainingDatasetRepository.kt` - Implementación persistencia por carpetas
-
 ### Archivos modificados
-- `ui/MainViewModel.kt` - Añadido modo entrenamiento completo
-- `MainActivity.kt` - UI de entrenamiento con 3 clases, contadores, gestión
-- `ui/ScreenMode.kt` (implícito) - Añadido modo TRAINING
+- `classification/DatasetClassifier.kt` - **REESCRITO**: Caché de features, sincronización explícita, estados
+- `monitoring/MonitoringManager.kt` - Estado de sincronización, resincronización, integración con caché
+- `ui/MainViewModel.kt` - Estado de sincronización, métodos de resincronización, observadores
+- `MainActivity.kt` - UI completa de clasificación (ClassificationSection)
 
 ## Riesgos y puntos de atención
 
-- **Dataset de entrenamiento**: Solo almacena, sin clasificación automática todavía
-- **Migración en progreso**: FrameData legacy sigue disponible para compatibilidad
-- **Umbrales provisionales**: 5% de píxeles para naranja/rojo pueden necesitar ajuste
-- **Sin lógica temporal compleja**: Persistencia de 20 segundos no implementada aún
-- **Rendimiento**: Conversión YUV→RGB→HSV en cada frame (optimizable con LUT)
-- falsos positivos parcialmente mitigados por estabilización
-- dependencia de conexión a internet para Telegram
+- **Caché en memoria**: Se pierde al cerrar la app (se regenera al iniciar vigilancia)
+- **Dataset recomendado**: Mínimo 5-10 muestras por clase para clasificación usable
+- **Sin persistencia de features**: No se guardan las features precalculadas en disco
+- **Límite de escalabilidad**: ~150 muestras totales por la complejidad O(n) de k-NN
+- **Sin ajuste dinámico de pesos**: Los pesos de features son fijos
 
 ## Estado de infraestructura
 
@@ -141,68 +107,23 @@ El baseline manual de estado OK (implementado en iteración anterior) sigue disp
 - **Estado de build**: ✅ COMPILA CORRECTAMENTE
 - **Warnings actuales**: 3 menores (deprecated durante transición, parámetro no usado)
 
-## Fase ACTIVA: Clasificación automática basada en dataset
+## Fases CERRADAS
 
-**Estado**: ✅ IMPLEMENTADA - Primera versión funcional
-
-Se ha implementado una primera versión de clasificación automática basada en el dataset etiquetado:
-
-### Representación de features elegida
-- **Histograma HSV**: 16 bins para el canal H (Hue), normalizado
-- **Estadísticas S/V**: Media y desviación estándar de Saturación y Value
-- **Features cromáticas**: Porcentaje de píxeles naranja, rojo y con color
-- **Vector de features**: Completamente explicable y comparable
-
-### Algoritmo de comparación
-- **k-NN (k=3)**: Vecinos más cercanos con votación ponderada por similitud
-- **Distancia ponderada**: Combina distancia de histograma (chi-cuadrado), estadísticas S/V y porcentajes cromáticos
-- **Similitud**: Transformación exponencial de la distancia (0.0-1.0)
-- **Confianza**: Basada en diferencia entre score de clase ganadora y segunda clase
-
-### Archivos creados/modificados
-- **Nuevos**:
-  - `classification/ColorFeatures.kt`: Modelo de features HSV
-  - `classification/DatasetClassifier.kt`: Clasificador k-NN
-- **Modificados**:
-  - `monitoring/MonitoringManager.kt`: Integración de clasificación en análisis
-  - `ui/MainViewModel.kt`: Exposición de estado de clasificación
-
-### Integración en flujo actual
-- Clasificación se ejecuta en cada análisis periódico (500ms) si hay dataset
-- Resultado disponible vía StateFlow para observación en UI
-- Dataset se sincroniza automáticamente desde TrainingDatasetRepository
-
-### Observabilidad en UI (pendiente de integración visual)
-- Clase estimada actual: `classificationResult.predictedClass`
-- Score/confianza: `classificationResult.confidence`
-- Muestras por clase usadas: `classificationResult.samplesUsed`
-- Top matches: `classificationResult.topMatches`
-- Features del frame actual: `classificationResult.featuresSummary`
-- Estadísticas del dataset: `datasetStats.summary()`
-
-### Limitaciones temporales de esta iteración
-- Sin UI visual de clasificación (datos disponibles en estado)
-- Comparación fuerza bruta O(n) - escalable hasta ~150 muestras
-- Sin ajuste dinámico de pesos de features
-- Sin persistencia de resultados de clasificación
+- ✅ Corrección pipeline cromático (cerrada)
+- ✅ Baseline manual OK (cerrada - legacy)
+- ✅ Evidencias visuales separadas (cerrada)
+- ✅ Modo entrenamiento supervisado (cerrada)
+- ✅ **Clasificación automática basada en dataset (CERRADA - usable)**
 
 ## Siguiente paso técnico recomendado
 
-**Opción A (SIGUIENTE): UI de clasificación en tiempo real**
-- Mostrar clase estimada actual con color (verde/naranja/rojo)
-- Barra de confianza visual
-- Indicador de muestras por clase disponibles
-- Botón para forzar sincronización dataset → clasificador
+**Fase CERRADA** - La clasificación automática está completa y usable.
 
-**Opción B: Mejoras de clasificación**
-- Ajustar pesos de features con datos reales
-- Implementar caché de features de muestras (evitar re-decodificar)
-- Añadir umbral mínimo de confianza para predicción válida
-
-**Opción C: Reglas de alerta basadas en clasificación**
-- Sustituir alertas basadas solo en umbrales por alertas basadas en clase detectada
-- Política: OBSTACULO → alerta temprana, FALLO → alerta crítica
-- Historial de clasificaciones para detectar patrones
+Posibles mejoras futuras (no prioritarias):
+- Persistir features precalculadas en disco para arranque más rápido
+- Ajuste dinámico de pesos de features basado en precisión observada
+- Umbral mínimo de confianza configurable para predicción válida
+- Historial de clasificaciones para detectar patrones temporales
 
 ## Recordatorio de disciplina SDD
 

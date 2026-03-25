@@ -21,6 +21,7 @@
  * - Estado de baseline OK: captura, conteo, reset
  * - Estado de entrenamiento: selección de clase, captura de muestras, contadores por clase
  * - Estado de evidencias visuales separadas: referencia actual, último evento, última confirmación
+ * - CLASIFICACIÓN AUTOMÁTICA: UI de clasificación en tiempo real con caché de features
  *
  * Limitaciones temporales del MVP:
  * - Lógica de detección usa luminancia simple (FrameData real pero análisis básico)
@@ -31,6 +32,10 @@
  * - Dataset de entrenamiento solo almacena, sin clasificación automática todavía
  *
  * Cambios recientes:
+ * - AÑADIDO: Integración completa de UI de clasificación automática
+ * - AÑADIDO: Estado de sincronización del dataset (syncStatus, cacheStats)
+ * - AÑADIDO: Método forceResyncDataset() para resincronización explícita
+ * - AÑADIDO: Exposición de classificationResult, datasetStats, cacheStats en UI
  * - AÑADIDO: Modo de entrenamiento supervisado manual con tres clases (OK, OBSTACULO, FALLO)
  * - AÑADIDO: Dataset local etiquetado con contadores por clase
  * - AÑADIDO: UI de captura de muestras de entrenamiento
@@ -49,8 +54,7 @@ import com.vigia.app.alert.AlertState
 import com.vigia.app.alert.ConfirmationState
 import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.classification.ClassificationResult
-import com.vigia.app.classification.DatasetStats
-import com.vigia.app.data.local.FileOkBaselineRepository
+import com.vigia.app.classification.CacheStats
 import com.vigia.app.data.local.FileTrainingDatasetRepository
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
@@ -66,6 +70,7 @@ import com.vigia.app.domain.repository.OkBaselineRepository
 import com.vigia.app.domain.repository.RoiRepository
 import com.vigia.app.domain.repository.TelegramConfigRepository
 import com.vigia.app.domain.repository.TrainingDatasetRepository
+import com.vigia.app.monitoring.DatasetSyncUiState
 import com.vigia.app.monitoring.MonitoringManager
 import com.vigia.app.telegram.TelegramResult
 import com.vigia.app.telegram.TelegramService
@@ -81,7 +86,7 @@ import kotlinx.coroutines.launch
 enum class ScreenMode {
     NORMAL,           // Vista normal con preview y controles
     ROI_SELECTION,    // Modo de selección de ROI
-    TRAINING          // NUEVO: Modo de entrenamiento supervisado
+    TRAINING          // Modo de entrenamiento supervisado
 }
 
 /**
@@ -155,7 +160,9 @@ data class MainUiState(
     val visualEvidenceState: VisualEvidenceState = VisualEvidenceState(),
     // Clasificación automática
     val classificationResult: ClassificationResult? = null,
-    val datasetStats: DatasetStats = DatasetStats(0, 0, 0, 0, false)
+    val datasetSyncStatus: DatasetSyncUiState = DatasetSyncUiState.EMPTY,
+    val datasetStats: com.vigia.app.classification.DatasetStats = com.vigia.app.classification.DatasetStats(0, 0, 0, 0, false),
+    val cacheStats: CacheStats? = null
 )
 
 /**
@@ -233,6 +240,24 @@ class MainViewModel(
             monitoringManager.classificationResult.collect { result ->
                 _uiState.update { currentState ->
                     currentState.copy(classificationResult = result)
+                }
+            }
+        }
+
+        // Observar estado de sincronización del dataset
+        viewModelScope.launch {
+            monitoringManager.datasetSyncStatus.collect { status ->
+                _uiState.update { currentState ->
+                    currentState.copy(datasetSyncStatus = status)
+                }
+            }
+        }
+
+        // Observar estadísticas de caché
+        viewModelScope.launch {
+            monitoringManager.cacheStats.collect { stats ->
+                _uiState.update { currentState ->
+                    currentState.copy(cacheStats = stats)
                 }
             }
         }
@@ -359,6 +384,8 @@ class MainViewModel(
     // ==================== VIGILANCIA ====================
 
     fun startMonitoring() {
+        // Sincronizar dataset antes de iniciar vigilancia
+        syncTrainingDatasetWithClassifier()
         monitoringManager.startMonitoring(_uiState.value.currentRoi)
     }
 
@@ -537,6 +564,9 @@ class MainViewModel(
                         )
                     )
                 }
+                
+                // Marcar dataset como desactualizado para que se resincronice
+                markDatasetAsStale()
             } else {
                 _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Error al guardar la muestra")) }
             }
@@ -560,6 +590,8 @@ class MainViewModel(
                         trainingCaptureState = TrainingCaptureState.Success("Clase ${label.name} reiniciada")
                     )
                 }
+                // Marcar dataset como desactualizado
+                markDatasetAsStale()
             } else {
                 _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Error al reiniciar clase ${label.name}")) }
             }
@@ -582,6 +614,8 @@ class MainViewModel(
                         trainingCaptureState = TrainingCaptureState.Success("Dataset de entrenamiento reiniciado")
                     )
                 }
+                // Marcar dataset como desactualizado
+                markDatasetAsStale()
             } else {
                 _uiState.update { it.copy(trainingCaptureState = TrainingCaptureState.Error("Error al reiniciar dataset")) }
             }
@@ -701,6 +735,54 @@ class MainViewModel(
         _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Idle) }
     }
 
+    // ==================== CLASIFICACIÓN AUTOMÁTICA ====================
+
+    /**
+     * Actualiza el dataset de entrenamiento en el MonitoringManager.
+     * Llamar después de capturar muestras o modificar el dataset.
+     */
+    fun syncTrainingDatasetWithClassifier() {
+        val allSamples = _uiState.value.trainingDatasetState.getAllSamples()
+        monitoringManager.updateTrainingDataset(allSamples)
+        
+        // Si hay muestras, forzar sincronización de la caché
+        if (allSamples.isNotEmpty()) {
+            monitoringManager.forceResyncDataset()
+        }
+        
+        // Actualizar estadísticas en UI
+        val stats = monitoringManager.getDatasetStats()
+        _uiState.update { it.copy(datasetStats = stats) }
+    }
+
+    /**
+     * Fuerza una resincronización del dataset.
+     * Útil cuando el usuario quiere asegurarse de que el clasificador tiene los datos más recientes.
+     */
+    fun forceResyncDataset() {
+        monitoringManager.forceResyncDataset()
+        
+        // Actualizar estadísticas
+        val stats = monitoringManager.getDatasetStats()
+        _uiState.update { it.copy(datasetStats = stats) }
+    }
+
+    /**
+     * Marca el dataset como desactualizado (STALE).
+     * Se llama automáticamente cuando se modifican las muestras.
+     */
+    private fun markDatasetAsStale() {
+        val allSamples = _uiState.value.trainingDatasetState.getAllSamples()
+        monitoringManager.updateTrainingDataset(allSamples)
+    }
+
+    /**
+     * Verifica si el dataset está listo para clasificación.
+     */
+    fun isDatasetReadyForClassification(): Boolean {
+        return monitoringManager.isDatasetReady()
+    }
+
     // ==================== UTILIDADES ====================
 
     private fun bitmapToJpeg(bitmap: Bitmap, quality: Int = 90): ByteArray? {
@@ -719,28 +801,6 @@ class MainViewModel(
 
     fun clearAlertState() = alertManager.clearState()
     fun clearConfirmationState() = alertManager.clearConfirmationState()
-
-    // ==================== CLASIFICACIÓN AUTOMÁTICA ====================
-
-    /**
-     * Actualiza el dataset de entrenamiento en el MonitoringManager.
-     * Llamar después de capturar muestras o modificar el dataset.
-     */
-    fun syncTrainingDatasetWithClassifier() {
-        val allSamples = _uiState.value.trainingDatasetState.getAllSamples()
-        monitoringManager.updateTrainingDataset(allSamples)
-        
-        // Actualizar estadísticas en UI
-        val stats = monitoringManager.getDatasetStats()
-        _uiState.update { it.copy(datasetStats = stats) }
-    }
-
-    /**
-     * Verifica si el dataset está listo para clasificación.
-     */
-    fun isDatasetReadyForClassification(): Boolean {
-        return monitoringManager.isDatasetReady()
-    }
 
     override fun onCleared() {
         super.onCleared()

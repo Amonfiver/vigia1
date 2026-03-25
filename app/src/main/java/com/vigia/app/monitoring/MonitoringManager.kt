@@ -13,12 +13,19 @@
  * - Recepción de frames reales de CameraX vía StateFlow
  * - CAPA DE ESTABILIZACIÓN: Requiere detecciones consecutivas antes de confirmar cambio
  * - SUBREGIÓN ACTIVA: Deriva región de análisis dentro del ROI global
+ * - CLASIFICACIÓN CON CACHE: Usa DatasetClassifier con precálculo de features del dataset
  *
  * Heurística espacial implementada:
  * - Dentro del ROI global definido por el usuario, se deriva una subregión activa
  * - Por defecto: 60% del área central, con sesgo vertical hacia arriba (0.4)
  * - Esto concentra el análisis en el cuerpo del transfer
  * - Reduce influencia del fondo de vía (blanco + líneas negras paralelas)
+ *
+ * Estrategia de sincronización del dataset:
+ * - syncTrainingDataset() debe llamarse explícitamente cuando cambia el dataset
+ * - La primera sincronización ocurre automáticamente en startMonitoring si hay dataset
+ * - El estado de sincronización se expone vía datasetSyncStatus para la UI
+ * - Resincronización manual disponible via forceResyncDataset()
  *
  * Limitaciones temporales del MVP:
  * - Análisis periódico simple, no sincronizado exactamente con cada frame de cámara
@@ -27,6 +34,10 @@
  * - Lógica de estabilización es simple (contador con timeout)
  *
  * Cambios recientes:
+ * - ACTUALIZADO: Integración con DatasetClassifier usando caché de features
+ * - AÑADIDO: Estado de sincronización del dataset (SYNCED, SYNCING, STALE, EMPTY)
+ * - AÑADIDO: Método forceResyncDataset() para resincronización explícita
+ * - AÑADIDO: Exposición de cacheStats para observabilidad de la caché
  * - AÑADIDO: Soporte para ColorFrameData con análisis cromático HSV
  * - AÑADIDO: Integración con ColorBasedDetector
  * - AÑADIDO: Exposición de información de subregión activa para observabilidad
@@ -36,8 +47,7 @@
  */
 package com.vigia.app.monitoring
 
-import com.vigia.app.classification.ClassificationResult
-import com.vigia.app.classification.DatasetClassifier
+import com.vigia.app.classification.*
 import com.vigia.app.detection.*
 import com.vigia.app.domain.model.ClassLabel
 import com.vigia.app.domain.model.Roi
@@ -48,6 +58,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
+ * Estado de sincronización del dataset para la UI.
+ */
+enum class DatasetSyncUiState {
+    EMPTY,      // No hay muestras en el dataset
+    SYNCING,    // Sincronizando (precalculando features)
+    SYNCED,     // Dataset cacheado y listo
+    STALE       // Dataset cambió, necesita resincronización
+}
+
+/**
  * Gestor del estado de monitorización y análisis de ROI.
  * Controla si la vigilancia está activa y coordina el análisis del detector.
  *
@@ -55,6 +75,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * - Capa de estabilización: requiere detecciones consecutivas antes de confirmar
  * - Soporte para análisis cromático (HSV) y legacy (luminancia)
  * - Subregión activa dentro del ROI global
+ * - Clasificación automática con caché de features del dataset
  *
  * @param colorDetector Detector cromático a utilizar (default: ColorBasedDetector)
  * @param legacyDetector Detector legacy para compatibilidad (default: SimpleFrameDifferenceDetector)
@@ -101,6 +122,14 @@ class MonitoringManager(
 
     private val datasetClassifier = DatasetClassifier(k = 3)
     private var trainingDataset: List<TrainingSample> = emptyList()
+    
+    // Estado de sincronización expuesto para la UI
+    private val _datasetSyncStatus = MutableStateFlow(DatasetSyncUiState.EMPTY)
+    val datasetSyncStatus: StateFlow<DatasetSyncUiState> = _datasetSyncStatus.asStateFlow()
+    
+    // Estadísticas de caché expuestas para la UI
+    private val _cacheStats = MutableStateFlow<CacheStats?>(null)
+    val cacheStats: StateFlow<CacheStats?> = _cacheStats.asStateFlow()
 
     private var analysisJob: Job? = null
     private var currentRoi: Roi? = null
@@ -145,6 +174,7 @@ class MonitoringManager(
 
     /**
      * Inicia la monitorización con un ROI específico.
+     * Si hay un dataset disponible, lo sincroniza automáticamente.
      */
     fun startMonitoring(roi: Roi? = null) {
         if (_isMonitoring.value) return
@@ -158,6 +188,11 @@ class MonitoringManager(
         resetStabilizationState()
         colorDetector.reset()
         legacyDetector.reset()
+        
+        // Sincronizar dataset automáticamente si hay datos
+        if (trainingDataset.isNotEmpty()) {
+            syncTrainingDatasetInternal()
+        }
 
         // Iniciar análisis periódico
         analysisJob = scope.launch {
@@ -262,26 +297,73 @@ class MonitoringManager(
             message = stabilizedResult.message
         )
 
-        // Realizar clasificación automática basada en dataset (si hay datos)
-        if (trainingDataset.isNotEmpty()) {
+        // Realizar clasificación automática basada en dataset (si hay caché disponible)
+        if (datasetClassifier.getSyncStatus() == DatasetSyncStatus.SYNCED) {
             performClassification(colorFrameData)
         }
     }
 
     /**
-     * Actualiza el dataset de entrenamiento para clasificación automática.
+     * Actualiza el dataset de entrenamiento y sincroniza la caché de features.
      * Llamar cuando se capturen nuevas muestras o se modifique el dataset.
+     * Esta operación precalcula las features de todas las muestras (costosa, no bloqueante).
      *
      * @param dataset Nuevo dataset completo
      */
     fun updateTrainingDataset(dataset: List<TrainingSample>) {
         trainingDataset = dataset
+        // Marcar como STALE para forzar resincronización
+        datasetClassifier.invalidateCache()
+        _datasetSyncStatus.value = DatasetSyncUiState.STALE
     }
 
     /**
-     * Obtiene estadísticas del dataset actual.
+     * Sincroniza internamente el dataset (llamado desde startMonitoring).
      */
-    fun getDatasetStats(): com.vigia.app.classification.DatasetStats {
+    private fun syncTrainingDatasetInternal() {
+        if (trainingDataset.isEmpty()) {
+            _datasetSyncStatus.value = DatasetSyncUiState.EMPTY
+            return
+        }
+        
+        _datasetSyncStatus.value = DatasetSyncUiState.SYNCING
+        
+        // Realizar sincronización (precálculo de features)
+        val result = datasetClassifier.syncDataset(trainingDataset)
+        
+        // Actualizar estado según resultado
+        _datasetSyncStatus.value = when (result.status) {
+            DatasetSyncStatus.SYNCED -> DatasetSyncUiState.SYNCED
+            DatasetSyncStatus.EMPTY -> DatasetSyncUiState.EMPTY
+            DatasetSyncStatus.STALE -> DatasetSyncUiState.STALE
+        }
+        
+        // Actualizar estadísticas de caché
+        _cacheStats.value = datasetClassifier.getCacheStats()
+    }
+
+    /**
+     * Fuerza una resincronización del dataset.
+     * Útil cuando el usuario quiere asegurarse de que el dataset está actualizado.
+     */
+    fun forceResyncDataset() {
+        syncTrainingDatasetInternal()
+    }
+
+    /**
+     * Obtiene el estado de sincronización actual del dataset.
+     */
+    fun getDatasetSyncStatus(): DatasetSyncUiState = _datasetSyncStatus.value
+
+    /**
+     * Obtiene estadísticas de la caché actual.
+     */
+    fun getCacheStats(): CacheStats? = _cacheStats.value
+
+    /**
+     * Obtiene estadísticas del dataset para observabilidad.
+     */
+    fun getDatasetStats(): DatasetStats {
         return datasetClassifier.getDatasetStats(trainingDataset)
     }
 
@@ -289,28 +371,19 @@ class MonitoringManager(
      * Verifica si el dataset tiene suficientes muestras para clasificar.
      */
     fun isDatasetReady(): Boolean {
-        return datasetClassifier.isDatasetReady(trainingDataset)
+        return datasetClassifier.isDatasetReady()
     }
 
     /**
-     * Realiza clasificación automática del frame actual contra el dataset.
-     * Llama a esto desde el análisis periódico si hay dataset disponible.
+     * Realiza clasificación automática del frame actual contra el dataset cacheado.
+     * Usa las features precalculadas en caché (sin decodificación JPEG).
      */
     private fun performClassification(frameData: ColorFrameData) {
-        if (trainingDataset.isEmpty()) {
-            _classificationResult.value = ClassificationResult(
-                predictedClass = ClassLabel.OK,
-                confidence = 0f,
-                classScores = emptyMap(),
-                samplesUsed = 0,
-                topMatches = emptyList(),
-                featuresSummary = "Sin dataset de entrenamiento"
-            )
-            return
-        }
-
-        val result = datasetClassifier.classify(frameData, trainingDataset)
+        val result = datasetClassifier.classify(frameData)
         _classificationResult.value = result
+        
+        // Actualizar estadísticas de caché periódicamente (cada clasificación por simplicidad)
+        _cacheStats.value = datasetClassifier.getCacheStats()
     }
 
     /**
@@ -371,6 +444,7 @@ class MonitoringManager(
      */
     fun cleanup() {
         stopMonitoring()
+        datasetClassifier.clearCache()
         scope.cancel()
     }
     
