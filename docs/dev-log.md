@@ -1210,4 +1210,124 @@ Implementar clasificación automática basada en el dataset:
 
 ---
 
-## Entrada 020 - [Siguiente fase pendiente]
+## Entrada 020 - Clasificación automática basada en dataset etiquetado
+
+### Fecha
+2026-03-25
+
+### Objetivo
+Implementar primera versión de clasificación automática basada en el dataset local etiquetado (OK, OBSTACULO, FALLO), sustituyendo parcialmente la lógica basada solo en umbrales genéricos.
+
+### Qué se hizo
+
+#### 1. Extracción de características (ColorFeatures)
+- **Modelo**: `classification/ColorFeatures.kt`
+- **Features implementadas**:
+  - Histograma H (Hue): 16 bins normalizados (suma = 1.0)
+  - Estadísticas S/V: Media y desviación estándar de saturación y value
+  - Features cromáticas: % naranja, % rojo, % píxeles con color
+- **Métodos**: Extracción desde ColorFrameData, cálculo de distancia/similitud
+- **Distancia ponderada**: Combina histograma (chi-cuadrado), estadísticas y porcentajes cromáticos
+
+#### 2. Clasificador k-NN (DatasetClassifier)
+- **Modelo**: `classification/DatasetClassifier.kt`
+- **Algoritmo**: k-Nearest Neighbors con k=3
+- **Estrategia de votación**: Ponderada por similitud (no solo conteo)
+- **Proceso**:
+  1. Extraer features del frame actual
+  2. Comparar contra todas las muestras del dataset (similitud coseno exponencial)
+  3. Seleccionar top-k muestras más similares
+  4. Agrupar por clase y calcular score ponderado
+  5. Decidir clase con mayor score
+  6. Calcular confianza basada en diferencia entre top 2 clases
+- **Resultado**: ClassificationResult con predictedClass, confidence, classScores, topMatches
+
+#### 3. Integración en MonitoringManager
+- Añadido `classificationResult: StateFlow<ClassificationResult?>` para observabilidad
+- Método `updateTrainingDataset()` para sincronizar dataset
+- Clasificación automática en cada análisis periódico (si hay dataset)
+- Estadísticas del dataset disponibles vía `getDatasetStats()`
+
+#### 4. Integración en MainViewModel
+- Estado `classificationResult` y `datasetStats` en MainUiState
+- Observación del flujo de clasificación desde MonitoringManager
+- Métodos `syncTrainingDatasetWithClassifier()` e `isDatasetReadyForClassification()`
+
+### Archivos creados
+- `classification/ColorFeatures.kt` (220 líneas) - Modelo de features HSV
+- `classification/DatasetClassifier.kt` (240 líneas) - Clasificador k-NN
+
+### Archivos modificados
+- `monitoring/MonitoringManager.kt` - Integración de clasificación, dataset en análisis
+- `ui/MainViewModel.kt` - Estado de clasificación, sincronización dataset
+
+### Representación de features elegida
+**Histograma HSV (16 bins) + Estadísticas S/V + Features cromáticas**
+- Histograma H: 16 bins para distribución de tonos (0-255 → 16 valores/bin)
+- Media y desviación estándar de S y V
+- Porcentajes de naranja, rojo y píxeles con color
+- Todo normalizado a rangos comparables (0.0-1.0)
+
+### Cómo se compara la imagen actual con el dataset
+1. Extraer ColorFeatures del frame actual
+2. Para cada muestra del dataset:
+   - Decodificar JPEG a Bitmap
+   - Extraer ColorFeatures de la muestra
+   - Calcular distancia ponderada entre features
+   - Transformar a similitud (exp(-dist/N))
+3. Seleccionar top-k (k=3) muestras con mayor similitud
+4. Votación ponderada: score_clase = Σ(similitud_i) para muestras de esa clase
+5. Normalizar scores para que sumen 1.0
+6. Clase ganadora: mayor score
+7. Confianza: diferencia entre score top 1 y top 2 (escalada a 0.0-1.0)
+
+### Tracking de subtareas
+
+- [x] Crear modelo ColorFeatures con histograma HSV
+- [x] Implementar extracción de features desde ColorFrameData
+- [x] Implementar cálculo de distancia y similitud entre features
+- [x] Crear DatasetClassifier con algoritmo k-NN
+- [x] Implementar votación ponderada por similitud
+- [x] Integrar clasificación en MonitoringManager
+- [x] Exponer resultado vía StateFlow
+- [x] Añadir estado de clasificación a MainViewModel
+- [x] Implementar sincronización dataset → clasificador
+- [x] Verificar compilación exitosa
+- [ ] Integrar UI visual de clasificación (pendiente siguiente iteración)
+
+### Estado de build
+✅ COMPILA CORRECTAMENTE (3 warnings menores preexistentes)
+
+### Cómo verificar manualmente la clasificación
+
+1. **Preparar dataset**:
+   - Entrar en modo entrenamiento
+   - Capturar 5-10+ muestras de cada clase (OK, OBSTACULO, FALLO)
+   - Salir del modo entrenamiento
+
+2. **Iniciar vigilancia**:
+   - Definir ROI sobre el transfer
+   - Iniciar monitorización
+   - Verificar que dataset se sincroniza automáticamente
+
+3. **Observar clasificación**:
+   - La clasificación se actualiza cada 500ms durante vigilancia
+   - Datos disponibles en estado: predictedClass, confidence, classScores
+   - (UI visual pendiente de implementar en siguiente iteración)
+
+### Limitaciones temporales
+- Sin UI visual de clasificación (datos disponibles en estado del ViewModel)
+- Comparación fuerza bruta O(n) - escalable hasta ~150 muestras totales
+- Sin caché de features de muestras (re-decodifica en cada clasificación)
+- Sin ajuste dinámico de pesos de features
+
+### Siguiente paso recomendado
+Implementar UI visual de clasificación:
+- Indicador de clase estimada (color verde/naranja/rojo)
+- Barra de confianza
+- Contador de muestras por clase disponibles
+- Botón para forzar re-sincronización del dataset
+
+---
+
+## Entrada 021 - [Siguiente fase pendiente]

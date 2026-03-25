@@ -48,6 +48,8 @@ import com.vigia.app.alert.AlertManager
 import com.vigia.app.alert.AlertState
 import com.vigia.app.alert.ConfirmationState
 import com.vigia.app.camera.FrameProcessor
+import com.vigia.app.classification.ClassificationResult
+import com.vigia.app.classification.DatasetStats
 import com.vigia.app.data.local.FileOkBaselineRepository
 import com.vigia.app.data.local.FileTrainingDatasetRepository
 import com.vigia.app.detection.DetectionResult
@@ -150,7 +152,10 @@ data class MainUiState(
     val trainingCaptureState: TrainingCaptureState = TrainingCaptureState.Idle,
     val selectedTrainingClass: ClassLabel = ClassLabel.OK,
     // Evidencias visuales
-    val visualEvidenceState: VisualEvidenceState = VisualEvidenceState()
+    val visualEvidenceState: VisualEvidenceState = VisualEvidenceState(),
+    // Clasificación automática
+    val classificationResult: ClassificationResult? = null,
+    val datasetStats: DatasetStats = DatasetStats(0, 0, 0, 0, false)
 )
 
 /**
@@ -219,6 +224,15 @@ class MainViewModel(
                 }
                 if (confirmationState is ConfirmationState.Success) {
                     captureConfirmationEvidence()
+                }
+            }
+        }
+
+        // Observar resultado de clasificación automática
+        viewModelScope.launch {
+            monitoringManager.classificationResult.collect { result ->
+                _uiState.update { currentState ->
+                    currentState.copy(classificationResult = result)
                 }
             }
         }
@@ -705,6 +719,28 @@ class MainViewModel(
 
     fun clearAlertState() = alertManager.clearState()
     fun clearConfirmationState() = alertManager.clearConfirmationState()
+
+    // ==================== CLASIFICACIÓN AUTOMÁTICA ====================
+
+    /**
+     * Actualiza el dataset de entrenamiento en el MonitoringManager.
+     * Llamar después de capturar muestras o modificar el dataset.
+     */
+    fun syncTrainingDatasetWithClassifier() {
+        val allSamples = _uiState.value.trainingDatasetState.getAllSamples()
+        monitoringManager.updateTrainingDataset(allSamples)
+        
+        // Actualizar estadísticas en UI
+        val stats = monitoringManager.getDatasetStats()
+        _uiState.update { it.copy(datasetStats = stats) }
+    }
+
+    /**
+     * Verifica si el dataset está listo para clasificación.
+     */
+    fun isDatasetReadyForClassification(): Boolean {
+        return monitoringManager.isDatasetReady()
+    }
 
     override fun onCleared() {
         super.onCleared()

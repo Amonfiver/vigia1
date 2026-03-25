@@ -141,23 +141,68 @@ El baseline manual de estado OK (implementado en iteración anterior) sigue disp
 - **Estado de build**: ✅ COMPILA CORRECTAMENTE
 - **Warnings actuales**: 3 menores (deprecated durante transición, parámetro no usado)
 
+## Fase ACTIVA: Clasificación automática basada en dataset
+
+**Estado**: ✅ IMPLEMENTADA - Primera versión funcional
+
+Se ha implementado una primera versión de clasificación automática basada en el dataset etiquetado:
+
+### Representación de features elegida
+- **Histograma HSV**: 16 bins para el canal H (Hue), normalizado
+- **Estadísticas S/V**: Media y desviación estándar de Saturación y Value
+- **Features cromáticas**: Porcentaje de píxeles naranja, rojo y con color
+- **Vector de features**: Completamente explicable y comparable
+
+### Algoritmo de comparación
+- **k-NN (k=3)**: Vecinos más cercanos con votación ponderada por similitud
+- **Distancia ponderada**: Combina distancia de histograma (chi-cuadrado), estadísticas S/V y porcentajes cromáticos
+- **Similitud**: Transformación exponencial de la distancia (0.0-1.0)
+- **Confianza**: Basada en diferencia entre score de clase ganadora y segunda clase
+
+### Archivos creados/modificados
+- **Nuevos**:
+  - `classification/ColorFeatures.kt`: Modelo de features HSV
+  - `classification/DatasetClassifier.kt`: Clasificador k-NN
+- **Modificados**:
+  - `monitoring/MonitoringManager.kt`: Integración de clasificación en análisis
+  - `ui/MainViewModel.kt`: Exposición de estado de clasificación
+
+### Integración en flujo actual
+- Clasificación se ejecuta en cada análisis periódico (500ms) si hay dataset
+- Resultado disponible vía StateFlow para observación en UI
+- Dataset se sincroniza automáticamente desde TrainingDatasetRepository
+
+### Observabilidad en UI (pendiente de integración visual)
+- Clase estimada actual: `classificationResult.predictedClass`
+- Score/confianza: `classificationResult.confidence`
+- Muestras por clase usadas: `classificationResult.samplesUsed`
+- Top matches: `classificationResult.topMatches`
+- Features del frame actual: `classificationResult.featuresSummary`
+- Estadísticas del dataset: `datasetStats.summary()`
+
+### Limitaciones temporales de esta iteración
+- Sin UI visual de clasificación (datos disponibles en estado)
+- Comparación fuerza bruta O(n) - escalable hasta ~150 muestras
+- Sin ajuste dinámico de pesos de features
+- Sin persistencia de resultados de clasificación
+
 ## Siguiente paso técnico recomendado
 
-**Opción A: Clasificación basada en dataset entrenado**
-- Implementar comparación de imagen actual contra muestras almacenadas
-- Calcular similitud (histograma, características HSV, etc.)
-- Clasificar automáticamente en OK/OBSTACULO/FALLO
-- Preparar base para detección automática basada en entrenamiento
+**Opción A (SIGUIENTE): UI de clasificación en tiempo real**
+- Mostrar clase estimada actual con color (verde/naranja/rojo)
+- Barra de confianza visual
+- Indicador de muestras por clase disponibles
+- Botón para forzar sincronización dataset → clasificador
 
-**Opción B: Detección de naranja persistente**
-- Afinar umbrales con datos reales del dataset
-- Implementar histéresis para evitar oscilaciones
-- Añadir indicador visual de % naranja detectado
+**Opción B: Mejoras de clasificación**
+- Ajustar pesos de features con datos reales
+- Implementar caché de features de muestras (evitar re-decodificar)
+- Añadir umbral mínimo de confianza para predicción válida
 
-**Opción C: Detección de rojo persistente**
-- Implementar lógica temporal (persistencia 20 segundos)
-- Distinguir rojo temporal vs rojo sostenido
-- Preparar para estado "fallo confirmado"
+**Opción C: Reglas de alerta basadas en clasificación**
+- Sustituir alertas basadas solo en umbrales por alertas basadas en clase detectada
+- Política: OBSTACULO → alerta temprana, FALLO → alerta crítica
+- Historial de clasificaciones para detectar patrones
 
 ## Recordatorio de disciplina SDD
 

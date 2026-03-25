@@ -30,12 +30,18 @@
  * - AÑADIDO: Soporte para ColorFrameData con análisis cromático HSV
  * - AÑADIDO: Integración con ColorBasedDetector
  * - AÑADIDO: Exposición de información de subregión activa para observabilidad
+ * - AÑADIDO: Clasificación automática basada en dataset etiquetado (k-NN)
+ * - AÑADIDO: DatasetClassifier con features HSV (histograma + estadísticas)
  * - MANTENIDO: FrameData legacy para compatibilidad durante transición
  */
 package com.vigia.app.monitoring
 
+import com.vigia.app.classification.ClassificationResult
+import com.vigia.app.classification.DatasetClassifier
 import com.vigia.app.detection.*
+import com.vigia.app.domain.model.ClassLabel
 import com.vigia.app.domain.model.Roi
+import com.vigia.app.domain.model.TrainingSample
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +90,17 @@ class MonitoringManager(
      * Permite visualizar en UI qué parte del ROI se está analizando.
      */
     val activeSubRegion: StateFlow<SubRegion?> = _activeSubRegion.asStateFlow()
+
+    // === Clasificación automática basada en dataset ===
+    private val _classificationResult = MutableStateFlow<ClassificationResult?>(null)
+    /**
+     * Resultado de clasificación automática basada en dataset etiquetado.
+     * Permite ver la clase estimada actual (OK, OBSTACULO, FALLO).
+     */
+    val classificationResult: StateFlow<ClassificationResult?> = _classificationResult.asStateFlow()
+
+    private val datasetClassifier = DatasetClassifier(k = 3)
+    private var trainingDataset: List<TrainingSample> = emptyList()
 
     private var analysisJob: Job? = null
     private var currentRoi: Roi? = null
@@ -244,6 +261,56 @@ class MonitoringManager(
             confidence = stabilizedResult.confidence,
             message = stabilizedResult.message
         )
+
+        // Realizar clasificación automática basada en dataset (si hay datos)
+        if (trainingDataset.isNotEmpty()) {
+            performClassification(colorFrameData)
+        }
+    }
+
+    /**
+     * Actualiza el dataset de entrenamiento para clasificación automática.
+     * Llamar cuando se capturen nuevas muestras o se modifique el dataset.
+     *
+     * @param dataset Nuevo dataset completo
+     */
+    fun updateTrainingDataset(dataset: List<TrainingSample>) {
+        trainingDataset = dataset
+    }
+
+    /**
+     * Obtiene estadísticas del dataset actual.
+     */
+    fun getDatasetStats(): com.vigia.app.classification.DatasetStats {
+        return datasetClassifier.getDatasetStats(trainingDataset)
+    }
+
+    /**
+     * Verifica si el dataset tiene suficientes muestras para clasificar.
+     */
+    fun isDatasetReady(): Boolean {
+        return datasetClassifier.isDatasetReady(trainingDataset)
+    }
+
+    /**
+     * Realiza clasificación automática del frame actual contra el dataset.
+     * Llama a esto desde el análisis periódico si hay dataset disponible.
+     */
+    private fun performClassification(frameData: ColorFrameData) {
+        if (trainingDataset.isEmpty()) {
+            _classificationResult.value = ClassificationResult(
+                predictedClass = ClassLabel.OK,
+                confidence = 0f,
+                classScores = emptyMap(),
+                samplesUsed = 0,
+                topMatches = emptyList(),
+                featuresSummary = "Sin dataset de entrenamiento"
+            )
+            return
+        }
+
+        val result = datasetClassifier.classify(frameData, trainingDataset)
+        _classificationResult.value = result
     }
 
     /**
