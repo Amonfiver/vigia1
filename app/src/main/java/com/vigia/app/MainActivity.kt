@@ -161,8 +161,8 @@ fun VigiaApp(
             onRequestPermission = onRequestPermission,
             onRoiSelected = { roi -> viewModel.confirmRoiSelection(roi) },
             onRoiSelectionCancelled = { viewModel.cancelRoiSelection() },
-            onCameraReady = { frameFlow, processor ->
-                viewModel.connectCamera(frameFlow, processor)
+            onCameraReady = { colorFrameFlow, legacyFrameFlow, processor ->
+                viewModel.connectCamera(colorFrameFlow, legacyFrameFlow, processor)
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -241,6 +241,7 @@ fun VigiaApp(
 
 /**
  * Área que muestra la preview de cámara, selector de ROI o overlay de ROI.
+ * Versión actualizada para soporte cromático.
  */
 @Composable
 fun CameraArea(
@@ -251,7 +252,7 @@ fun CameraArea(
     onRequestPermission: () -> Unit,
     onRoiSelected: (com.vigia.app.domain.model.Roi) -> Unit,
     onRoiSelectionCancelled: () -> Unit,
-    onCameraReady: (StateFlow<FrameData?>, FrameProcessor) -> Unit,
+    onCameraReady: (StateFlow<com.vigia.app.detection.ColorFrameData?>, StateFlow<FrameData?>?, FrameProcessor) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (!hasPermission) {
@@ -286,7 +287,9 @@ fun CameraArea(
         // Preview de cámara real con análisis de frames
         CameraPreview(
             modifier = Modifier.fillMaxSize(),
-            onCameraReady = onCameraReady,
+            onCameraReadyColor = { colorFlow, legacyFlow, processor ->
+                onCameraReady(colorFlow, legacyFlow, processor)
+            },
             onError = { /* Manejar error en fase posterior */ }
         )
 

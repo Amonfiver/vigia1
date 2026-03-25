@@ -9,7 +9,7 @@
  * - ImageAnalysis use case para procesamiento de frames en tiempo real
  * - AndroidView de Compose para integrar vista tradicional Android
  * - Lifecycle-aware para vincular cámara al ciclo de vida del Composable
- * - FrameProcessor como analyzer para extraer luminancia y capturar imágenes
+ * - FrameProcessor como analyzer para extraer información cromática (HSV) y capturar imágenes
  *
  * Limitaciones temporales del MVP:
  * - Cámara trasera fija, sin selector de cámara
@@ -17,9 +17,10 @@
  * - Sin manejo avanzado de rotación de frames
  *
  * Cambios recientes:
- * - Añadido ImageAnalysis use case para procesamiento de frames
- * - Integración con FrameProcessor para extraer luminancia y capturar imágenes
- * - Retorno de FrameProcessor para acceso a captura de imagen
+ * - AÑADIDO: Exposición de ColorFrameData con información cromática HSV
+ * - AÑADIDO: Callback onCameraReadyColor para nuevo análisis cromático
+ * - MANTENIDO: Callback onCameraReady legacy para compatibilidad durante transición
+ * - FrameProcessor ahora genera ambos tipos de datos (HSV + luminancia)
  */
 package com.vigia.app.camera
 
@@ -39,19 +40,32 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.vigia.app.detection.ColorFrameData
 import com.vigia.app.detection.FrameData
 import kotlinx.coroutines.flow.StateFlow
+
+/**
+ * Callback cuando la cámara está lista con datos cromáticos.
+ * Versión actualizada para análisis por color.
+ */
+typealias OnCameraReadyColor = (
+    colorFrameData: StateFlow<ColorFrameData?>,
+    legacyFrameData: StateFlow<FrameData?>,
+    processor: FrameProcessor
+) -> Unit
 
 /**
  * Composable que muestra el preview de la cámara y proporciona frames para análisis.
  *
  * @param modifier Modificador para el layout
- * @param onCameraReady Callback cuando la cámara está lista con el FrameProcessor
+ * @param onCameraReadyColor Callback cuando la cámara está lista (versión cromática)
+ * @param onCameraReady Callback legacy para compatibilidad (deprecated)
  * @param onError Callback para errores de inicialización de cámara
  */
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
+    onCameraReadyColor: OnCameraReadyColor? = null,
     onCameraReady: ((StateFlow<FrameData?>, FrameProcessor) -> Unit)? = null,
     onError: (Throwable) -> Unit = {}
 ) {
@@ -75,9 +89,19 @@ fun CameraPreview(
         }
     )
 
-    // Notificar que la cámara está lista con el processor
+    // Notificar que la cámara está lista con ambos flujos de datos
     DisposableEffect(frameProcessor) {
-        onCameraReady?.invoke(frameProcessor.frameData, frameProcessor)
+        if (onCameraReadyColor != null) {
+            // Nueva versión con soporte cromático
+            onCameraReadyColor(
+                frameProcessor.colorFrameData,
+                frameProcessor.frameData,
+                frameProcessor
+            )
+        } else if (onCameraReady != null) {
+            // Versión legacy
+            onCameraReady(frameProcessor.frameData, frameProcessor)
+        }
         onDispose {
             // La cámara se desvincula automáticamente por el lifecycle
         }

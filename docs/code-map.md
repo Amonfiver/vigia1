@@ -14,15 +14,17 @@ app/src/main/java/com/vigia/app/
 ├── alert/                             # Alertas automáticas basadas en detección
 │   └── AlertManager.kt                # Gestor de alertas automáticas con anti-spam
 ├── camera/                            # Captura y procesamiento de frames
-│   ├── CameraPreview.kt               # Preview + ImageAnalysis use case
-│   └── FrameProcessor.kt              # Analizador YUV → luminancia + captura imagen
+│   ├── CameraPreview.kt               # Preview + ImageAnalysis use case (ahora con soporte cromático)
+│   └── FrameProcessor.kt              # Analizador YUV → HSV (color) + luminancia (legacy) + captura imagen
 ├── data/                              # Persistencia
 │   └── local/
 │       ├── DataStoreRoiRepository.kt  # Persistencia de ROI
 │       └── DataStoreTelegramConfigRepository.kt # Persistencia Telegram
 ├── detection/                         # Lógica de detección (reemplazable)
-│   ├── RoiDetector.kt                 # Interfaz del detector
-│   └── SimpleFrameDifferenceDetector.kt # Implementación simple (provisional)
+│   ├── RoiDetector.kt                 # Interfaz del detector (legacy)
+│   ├── SimpleFrameDifferenceDetector.kt # Implementación simple basada en luminancia (provisional)
+│   ├── ColorFrameData.kt              # NUEVO: Estructura de datos cromáticos HSV
+│   └── ColorBasedDetector.kt          # NUEVO: Detector basado en análisis cromático
 ├── domain/                            # Modelos y contratos
 │   ├── model/
 │   │   ├── Roi.kt                     # Entidad ROI
@@ -31,14 +33,14 @@ app/src/main/java/com/vigia/app/
 │       ├── RoiRepository.kt           # Interfaz persistencia ROI
 │       └── TelegramConfigRepository.kt # Interfaz persistencia Telegram
 ├── monitoring/                        # Coordinación vigilancia + estabilización
-│   └── MonitoringManager.kt           # Estado vigilancia + análisis periódico + CAPA DE ESTABILIZACIÓN
+│   └── MonitoringManager.kt           # Estado vigilancia + análisis cromático periódico + subregión activa
 ├── telegram/                          # Envío de alertas
 │   └── TelegramService.kt             # Servicio Telegram con OkHttp (mensajes + imágenes)
 ├── ui/                                # Interfaz de usuario
-│   ├── MainViewModel.kt               # ViewModel principal (gestión estado completa)
+│   ├── MainViewModel.kt               # ViewModel principal (gestión estado completa, ahora con ColorFrameData)
 │   └── components/
 │       ├── RoiOverlay.kt              # Dibuja ROI sobre cámara
-│       └── RoiSelector.kt             # Selector táctil de ROI
+│       └── RoiSelector.kt             # Selector táctil de ROI (patrón MindaVigilante)
 └── utils/                             # Utilidades
     └── PermissionsHelper.kt           # Gestión de permisos
 ```

@@ -193,12 +193,34 @@ class MainViewModel(
 
     /**
      * Conecta el flujo de frames de la cámara al sistema de monitorización.
-     * Debe llamarse cuando el CameraPreview esté inicializado.
+     * Versión actualizada para soporte cromático.
      *
-     * @param frameDataFlow StateFlow que emite frames procesados de CameraX
+     * @param colorFrameDataFlow StateFlow que emite ColorFrameData procesados
+     * @param frameDataFlow StateFlow legacy para compatibilidad (puede ser null)
      * @param processor FrameProcessor para captura de imagen
      */
-    fun connectCamera(frameDataFlow: StateFlow<FrameData?>, processor: FrameProcessor) {
+    fun connectCamera(
+        colorFrameDataFlow: StateFlow<com.vigia.app.detection.ColorFrameData?>,
+        frameDataFlow: StateFlow<FrameData?>? = null,
+        processor: FrameProcessor
+    ) {
+        this.frameProcessor = processor
+        
+        // Conectar flujo cromático principal
+        monitoringManager.connectColorFrames(colorFrameDataFlow)
+        
+        // Conectar flujo legacy si se proporciona (compatibilidad)
+        frameDataFlow?.let {
+            monitoringManager.connectCameraFrames(it)
+        }
+    }
+
+    /**
+     * Método legacy para compatibilidad.
+     * @deprecated Usar connectCamera con ColorFrameData
+     */
+    @Deprecated("Usar connectCamera con ColorFrameData para análisis cromático")
+    fun connectCameraLegacy(frameDataFlow: StateFlow<FrameData?>, processor: FrameProcessor) {
         this.frameProcessor = processor
         monitoringManager.connectCameraFrames(frameDataFlow)
     }

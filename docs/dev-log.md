@@ -865,4 +865,144 @@ private fun pixelsToNormalizedRect(pixelRect: Rect, width: Float, height: Float)
 
 ---
 
-## Entrada 017 - [Siguiente fase pendiente]
+## Entrada 017 - Refactorización a análisis cromático HSV
+
+### Fecha
+2026-03-25
+
+### Objetivo
+Refactorizar la base de análisis visual para que deje de depender de grayscale como señal principal y pase a usar información cromática y subregión activa dentro del ROI.
+
+### Contexto del cambio
+Durante pruebas reales se identificó que la lógica basada en grayscale/luminancia no es válida para este caso de uso. Las señales semánticas relevantes son cromáticas:
+- **Naranja** = obstáculo / atención inmediata
+- **Rojo persistente** = fallo confirmado
+
+El ROI global cubre la vía completa, pero la región realmente informativa es el cuerpo rectangular del transfer, no el fondo de la vía (blanco + líneas negras).
+
+### Decisiones técnicas tomadas
+
+#### 1. Representación de color: HSV
+Elegido HSV sobre RGB porque:
+- Separa el tono (color) de la saturación e intensidad
+- El canal H (Hue) es más invariante a cambios de iluminación
+- Detección de naranja/rojo es directa mediante rangos de hue
+- Filtro de grises mediante umbral de saturación
+
+Rangos implementados:
+- Naranja: Hue 15-35 (~20°-50°)
+- Rojo: Hue 0-15 o 230-255 (~0°-20° o 320°-360°)
+
+#### 2. Heurística espacial: Subregión activa
+Dentro del ROI global (definido por usuario), se deriva una subregión activa:
+- **Estrategia**: 60% del área central
+- **Sesgo vertical**: 0.4 (ligeramente hacia arriba)
+- **Coordenadas relativas**: left=0.20, right=0.80, top=0.28, bottom=0.72
+- **Objetivo**: Concentrar análisis en cuerpo del transfer, ignorar bordes de la vía
+
+#### 3. Estructura de datos nuevas
+- `ColorFrameData`: Frame con píxeles HSV
+- `HsvPixel`: Representación HSV con métodos isOrange(), isRed()
+- `ColorStats`: Estadísticas calculadas (% naranja, % rojo, saturación media)
+- `SubRegion`: Definición de subregión activa dentro del ROI
+- `ColorBasedDetector`: Detector que usa información cromática
+- `ColorDetectionResult`: Resultado con tipo de señal detectada
+
+### Archivos creados
+- `app/src/main/java/com/vigia/app/detection/ColorFrameData.kt` (380 líneas)
+  - HsvPixel, ColorFrameData, ColorStats, SubRegion
+- `app/src/main/java/com/vigia/app/detection/ColorBasedDetector.kt` (220 líneas)
+  - Detector cromático con umbrales provisionales
+
+### Archivos modificados
+- `app/src/main/java/com/vigia/app/camera/FrameProcessor.kt`
+  - Añadido `_colorFrameData: StateFlow<ColorFrameData?>`
+  - Conversión YUV→RGB→HSV en `processImageDual()`
+  - Métodos `getRegionCrop()`, `getRoiCrop()` para observabilidad
+  
+- `app/src/main/java/com/vigia/app/monitoring/MonitoringManager.kt`
+  - Soporte dual: análisis cromático + legacy
+  - `colorDetectionResult: StateFlow<ColorDetectionResult?>`
+  - `activeSubRegion: StateFlow<SubRegion?>` para observabilidad
+  - `applyColorStabilization()` para lógica de confirmación con señales cromáticas
+  
+- `app/src/main/java/com/vigia/app/camera/CameraPreview.kt`
+  - Nuevo callback `OnCameraReadyColor` con ColorFrameData + FrameData legacy
+  
+- `app/src/main/java/com/vigia/app/ui/MainViewModel.kt`
+  - `connectCamera()` actualizado para aceptar ColorFrameData
+  
+- `app/src/main/java/com/vigia/app/MainActivity.kt`
+  - Integración del nuevo callback onCameraReadyColor
+
+### Clasificación implementada (base provisional)
+
+**Señal A: Naranja**
+- Umbral: 5% de píxeles naranja en subregión activa
+- Emoji: 🟠
+- Mensaje: "Naranja detectado: X.X% píxeles"
+- Interpretación: candidato a obstáculo / atención inmediata
+
+**Señal B: Rojo**
+- Umbral: 5% de píxeles rojo en subregión activa
+- Emoji: 🔴
+- Mensaje: "Rojo detectado: X.X% píxeles"
+- Interpretación: candidato a fallo confirmado
+- **Nota**: Lógica temporal de persistencia (20s) pendiente para próxima iteración
+
+### Observabilidad implementada
+
+**Crops de diagnóstico** (en FrameProcessor):
+```kotlin
+fun getLastFrameBitmap(): Bitmap?        // Frame completo en color
+fun getRegionCrop(l, t, r, b): Bitmap?   // Crop arbitrario
+fun getRoiCrop(roi): Bitmap?             // Crop del ROI
+```
+
+**Uso**: Permite verificar visualmente qué región analiza el sistema.
+
+### Limitaciones temporales de esta iteración
+
+- Umbrales de 5% son provisionales (requieren ajuste con datos reales)
+- Sin lógica temporal compleja (persistencia 20 segundos no implementada)
+- Conversión YUV→HSV sin optimización (sin tabla de lookup)
+- FrameData legacy sigue disponible para compatibilidad durante transición
+- Sin UI de visualización de crops en tiempo real (métodos disponibles, no integrados en UI)
+
+### Tracking de subtareas
+
+- [x] Crear estructura ColorFrameData con HSV
+- [x] Implementar conversión YUV→HSV en FrameProcessor
+- [x] Crear ColorBasedDetector con análisis cromático
+- [x] Implementar SubRegion con heurística espacial
+- [x] Actualizar MonitoringManager para soporte dual
+- [x] Actualizar CameraPreview con nuevo callback
+- [x] Actualizar MainViewModel para conectar flujos cromáticos
+- [x] Actualizar MainActivity para integración UI
+- [x] Verificar compilación exitosa
+- [x] Actualizar project-status.md
+- [x] Añadir entrada en dev-log.md
+
+### Compilación
+
+```
+BUILD SUCCESSFUL in 19s
+14 actionable tasks: 6 executed, 8 up-to-date
+Warnings: 4 menores (deprecated durante transición)
+```
+
+### Siguiente paso recomendado
+
+1. **Detección de naranja**: Afinar umbrales, implementar histéresis
+2. **Detección de rojo persistente**: Implementar lógica temporal (20s)
+3. **Mejora de observabilidad**: Añadir UI con crop de diagnóstico en tiempo real
+
+### Referencias
+
+- Heurística espacial: `SubRegion.centered(scaleFactor=0.6f, verticalBias=0.4f)`
+- Rangos HSV: `HsvPixel.isOrange()`, `HsvPixel.isRed()`
+- Detector: `ColorBasedDetector.analyzeColor()`
+
+---
+
+## Entrada 018 - [Siguiente fase pendiente]

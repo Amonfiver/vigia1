@@ -8,32 +8,33 @@
  * - StateFlow para estado reactivo de vigilancia
  * - StateFlow para resultado de detección (para observación desde UI)
  * - Integración con RoiDetector mediante inyección de dependencias
+ * - Soporte DUAL: FrameData legacy (luminancia) y ColorFrameData (cromático)
  * - Job de coroutine para análisis periódico que se inicia/para con la vigilancia
- * - Recepción de frames reales de CameraX vía StateFlow<FrameData?>
+ * - Recepción de frames reales de CameraX vía StateFlow
  * - CAPA DE ESTABILIZACIÓN: Requiere detecciones consecutivas antes de confirmar cambio
- *   - Umbral configurable de frames consecutivos (default: 3)
- *   - Timeout de reinicio si el cambio no se mantiene (default: 2 segundos)
- *   - Evita falsos positivos por picos breves o cambios aislados
+ * - SUBREGIÓN ACTIVA: Deriva región de análisis dentro del ROI global
+ *
+ * Heurística espacial implementada:
+ * - Dentro del ROI global definido por el usuario, se deriva una subregión activa
+ * - Por defecto: 60% del área central, con sesgo vertical hacia arriba (0.4)
+ * - Esto concentra el análisis en el cuerpo del transfer
+ * - Reduce influencia del fondo de vía (blanco + líneas negras paralelas)
  *
  * Limitaciones temporales del MVP:
  * - Análisis periódico simple, no sincronizado exactamente con cada frame de cámara
  * - Si no hay frames de cámara disponibles, el análisis no produce resultados
  * - Sin buffer de frames ni cola de procesamiento
- * - Lógica de estabilización es simple (contador con timeout), no analiza patrones complejos
+ * - Lógica de estabilización es simple (contador con timeout)
  *
  * Cambios recientes:
- * - Eliminada generación de datos simulados
- * - Añadida recepción de frames reales de CameraX
- * - Análisis ahora usa luminancia real del ROI
- * - AÑADIDA: Lógica de confirmación de cambio con detecciones consecutivas requeridas
- * - AÑADIDA: Timeout de reinicio para descartar cambios no sostenidos
+ * - AÑADIDO: Soporte para ColorFrameData con análisis cromático HSV
+ * - AÑADIDO: Integración con ColorBasedDetector
+ * - AÑADIDO: Exposición de información de subregión activa para observabilidad
+ * - MANTENIDO: FrameData legacy para compatibilidad durante transición
  */
 package com.vigia.app.monitoring
 
-import com.vigia.app.detection.DetectionResult
-import com.vigia.app.detection.FrameData
-import com.vigia.app.detection.RoiDetector
-import com.vigia.app.detection.SimpleFrameDifferenceDetector
+import com.vigia.app.detection.*
 import com.vigia.app.domain.model.Roi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,74 +45,107 @@ import kotlinx.coroutines.flow.asStateFlow
  * Gestor del estado de monitorización y análisis de ROI.
  * Controla si la vigilancia está activa y coordina el análisis del detector.
  *
- * Incluye capa de estabilización: requiere detecciones consecutivas antes de
- * confirmar un cambio como válido, reduciendo falsos positivos por picos breves.
+ * Incluye:
+ * - Capa de estabilización: requiere detecciones consecutivas antes de confirmar
+ * - Soporte para análisis cromático (HSV) y legacy (luminancia)
+ * - Subregión activa dentro del ROI global
  *
- * @param detector Detector de cambios a utilizar (default: SimpleFrameDifferenceDetector)
+ * @param colorDetector Detector cromático a utilizar (default: ColorBasedDetector)
+ * @param legacyDetector Detector legacy para compatibilidad (default: SimpleFrameDifferenceDetector)
  * @param scope CoroutineScope para lanzar el análisis periódico
- * @param consecutiveDetectionsRequired Número de detecciones consecutivas requeridas para confirmar cambio (default: 3)
- * @param stabilizationTimeoutMs Tiempo máximo entre detecciones antes de resetear contador (default: 2000ms)
+ * @param consecutiveDetectionsRequired Número de detecciones consecutivas requeridas
+ * @param stabilizationTimeoutMs Tiempo máximo entre detecciones antes de resetear
  */
 class MonitoringManager(
-    private val detector: RoiDetector = SimpleFrameDifferenceDetector(threshold = 30),
+    private val colorDetector: ColorBasedDetector = ColorBasedDetector(),
+    private val legacyDetector: RoiDetector = SimpleFrameDifferenceDetector(threshold = 30),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val consecutiveDetectionsRequired: Int = DEFAULT_CONSECUTIVE_DETECTIONS,
     private val stabilizationTimeoutMs: Long = DEFAULT_STABILIZATION_TIMEOUT_MS
 ) {
 
     private val _isMonitoring = MutableStateFlow(false)
-    /**
-     * Estado actual de la monitorización (true = vigilancia activa).
-     */
     val isMonitoring: StateFlow<Boolean> = _isMonitoring.asStateFlow()
 
+    // === Resultados de detección ===
     private val _detectionResult = MutableStateFlow<DetectionResult?>(null)
-    /**
-     * Último resultado de detección (null si no hay análisis reciente).
-     * NOTA: hasChange solo será true después de que se cumpla el criterio de estabilización
-     * (varias detecciones consecutivas), no en el primer pico detectado.
-     */
     val detectionResult: StateFlow<DetectionResult?> = _detectionResult.asStateFlow()
+
+    private val _colorDetectionResult = MutableStateFlow<ColorDetectionResult?>(null)
+    /**
+     * Último resultado de análisis cromático.
+     */
+    val colorDetectionResult: StateFlow<ColorDetectionResult?> = _colorDetectionResult.asStateFlow()
+
+    // === Información de subregión activa (para observabilidad) ===
+    private val _activeSubRegion = MutableStateFlow<SubRegion?>(null)
+    /**
+     * Subregión activa actualmente usada para análisis.
+     * Permite visualizar en UI qué parte del ROI se está analizando.
+     */
+    val activeSubRegion: StateFlow<SubRegion?> = _activeSubRegion.asStateFlow()
 
     private var analysisJob: Job? = null
     private var currentRoi: Roi? = null
-    private var frameDataFlow: StateFlow<FrameData?>? = null
+    private var colorFrameDataFlow: StateFlow<ColorFrameData?>? = null
+    private var legacyFrameDataFlow: StateFlow<FrameData?>? = null
 
     // Variables para lógica de estabilización
     private var consecutiveChangeCount: Int = 0
     private var lastDetectionTimestamp: Long = 0
     private var isChangeConfirmed: Boolean = false
-    private var lastConfirmedResult: DetectionResult? = null
 
     /**
-     * Conecta el flujo de frames de la cámara al manager.
-     * Debe llamarse antes o durante startMonitoring().
+     * Conecta el flujo de frames cromáticos de la cámara al manager.
+     * Este es el método principal para el nuevo análisis por color.
      *
-     * @param frameDataFlow StateFlow que emite frames procesados de CameraX
+     * @param colorFrameDataFlow StateFlow que emite ColorFrameData procesados
      */
+    fun connectColorFrames(colorFrameDataFlow: StateFlow<ColorFrameData?>) {
+        this.colorFrameDataFlow = colorFrameDataFlow
+    }
+
+    /**
+     * Conecta el flujo de frames legacy (luminancia) para compatibilidad.
+     *
+     * @param frameDataFlow StateFlow que emite FrameData legacy
+     */
+    @Deprecated("Usar connectColorFrames para análisis cromático")
     fun connectCameraFrames(frameDataFlow: StateFlow<FrameData?>) {
-        this.frameDataFlow = frameDataFlow
+        this.legacyFrameDataFlow = frameDataFlow
+    }
+
+    /**
+     * Conecta ambos flujos de frames (dual mode durante transición).
+     */
+    fun connectDualFrames(
+        colorFrameDataFlow: StateFlow<ColorFrameData?>,
+        legacyFrameDataFlow: StateFlow<FrameData?>
+    ) {
+        this.colorFrameDataFlow = colorFrameDataFlow
+        this.legacyFrameDataFlow = legacyFrameDataFlow
     }
 
     /**
      * Inicia la monitorización con un ROI específico.
-     *
-     * @param roi ROI a analizar (puede ser null, el detector manejará ese caso)
      */
     fun startMonitoring(roi: Roi? = null) {
-        if (_isMonitoring.value) return // Ya está activa
+        if (_isMonitoring.value) return
 
         currentRoi = roi
         _isMonitoring.value = true
         
-        // Resetear estado de estabilización
+        // Calcular y exponer subregión activa
+        _activeSubRegion.value = calculateActiveSubRegion()
+        
         resetStabilizationState()
-        detector.reset() // Establecer nueva referencia base
+        colorDetector.reset()
+        legacyDetector.reset()
 
         // Iniciar análisis periódico
         analysisJob = scope.launch {
             while (isActive) {
-                performAnalysis()
+                performColorAnalysis()
                 delay(ANALYSIS_INTERVAL_MS)
             }
         }
@@ -125,152 +159,142 @@ class MonitoringManager(
         analysisJob?.cancel()
         analysisJob = null
         _detectionResult.value = null
+        _colorDetectionResult.value = null
+        _activeSubRegion.value = null
         
-        // Limpiar estado de estabilización
         resetStabilizationState()
     }
 
     /**
-     * Actualiza el ROI durante la monitorización (si cambia mientras se vigila).
-     *
-     * @param roi Nuevo ROI a analizar
+     * Actualiza el ROI durante la monitorización.
      */
     fun updateRoi(roi: Roi?) {
         currentRoi = roi
         if (_isMonitoring.value) {
-            detector.reset() // Reiniciar referencia con nuevo ROI
-            resetStabilizationState() // Resetear también estabilización
+            _activeSubRegion.value = calculateActiveSubRegion()
+            colorDetector.reset()
+            legacyDetector.reset()
+            resetStabilizationState()
         }
     }
 
     /**
-     * Resetea el estado de estabilización de detección.
+     * Calcula la subregión activa basada en la configuración del detector.
      */
+    private fun calculateActiveSubRegion(): SubRegion {
+        // Extraer subregión de la descripción del detector
+        // Por simplicidad, calculamos la subregión CENTERED_60 directamente
+        return SubRegion.centered(0.6f, 0.4f, "Centro 60% del ROI (cuerpo del transfer)")
+    }
+
+    /**
+     * Obtiene la descripción de la heurística espacial actual.
+     */
+    fun getSubRegionDescription(): String {
+        return colorDetector.getSubRegionDescription()
+    }
+
     private fun resetStabilizationState() {
         consecutiveChangeCount = 0
         lastDetectionTimestamp = 0
         isChangeConfirmed = false
-        lastConfirmedResult = null
     }
 
     /**
-     * Realiza un ciclo de análisis usando frames reales de la cámara.
-     * Espera el último frame disponible y lo analiza con el detector.
-     * 
-     * Aplica lógica de estabilización: solo confirma el cambio después de
-     * varias detecciones consecutivas dentro de la ventana de tiempo.
+     * Realiza análisis cromático usando ColorFrameData.
+     * Este es el método principal de análisis en la nueva arquitectura.
      */
-    private suspend fun performAnalysis() {
+    private suspend fun performColorAnalysis() {
         val roi = currentRoi
-        val frameFlow = frameDataFlow
+        val colorFlow = colorFrameDataFlow
 
-        // Si no hay flujo de cámara conectado, no se puede analizar
-        if (frameFlow == null) {
-            _detectionResult.value = DetectionResult(
+        if (colorFlow == null) {
+            _colorDetectionResult.value = ColorDetectionResult(
                 hasChange = false,
                 confidence = 0f,
-                message = "Esperando frames de cámara..."
+                message = "Esperando frames de cámara...",
+                detectedSignal = DetectedSignal.NONE
             )
             return
         }
 
-        // Obtener el último frame disponible
-        val frameData = frameFlow.value
+        val colorFrameData = colorFlow.value
         
-        if (frameData == null) {
-            _detectionResult.value = DetectionResult(
+        if (colorFrameData == null) {
+            _colorDetectionResult.value = ColorDetectionResult(
                 hasChange = false,
                 confidence = 0f,
-                message = "Sin datos de frame disponibles"
+                message = "Sin datos de frame disponibles",
+                detectedSignal = DetectedSignal.NONE
             )
             return
         }
 
-        // Realizar análisis con el frame real
-        val rawResult = detector.analyze(frameData, roi)
+        // Realizar análisis cromático
+        val rawResult = colorDetector.analyzeColor(colorFrameData, roi)
         
         // Aplicar lógica de estabilización
-        val stabilizedResult = applyStabilization(rawResult)
+        val stabilizedResult = applyColorStabilization(rawResult)
         
-        _detectionResult.value = stabilizedResult
+        _colorDetectionResult.value = stabilizedResult
+        
+        // También actualizar el resultado legacy para compatibilidad
+        _detectionResult.value = DetectionResult(
+            hasChange = stabilizedResult.hasChange,
+            confidence = stabilizedResult.confidence,
+            message = stabilizedResult.message
+        )
     }
 
     /**
-     * Aplica lógica de estabilización al resultado del detector.
-     * 
-     * Estrategia:
-     * 1. Si el detector NO detecta cambio -> resetear contador, no hay cambio
-     * 2. Si el detector detecta cambio:
-     *    - Verificar si pasó mucho tiempo desde última detección (timeout)
-     *    - Incrementar contador de detecciones consecutivas
-     *    - Si contador >= umbral -> confirmar cambio (hasChange = true)
-     *    - Si contador < umbral -> reportar "detectando" pero hasChange = false
-     * 
-     * @param rawResult Resultado crudo del detector
-     * @return Resultado estabilizado para consumo del resto del sistema
+     * Aplica lógica de estabilización al resultado cromático.
      */
-    private fun applyStabilization(rawResult: DetectionResult): DetectionResult {
+    private fun applyColorStabilization(rawResult: ColorDetectionResult): ColorDetectionResult {
         val now = System.currentTimeMillis()
         
-        // Si el detector no detecta cambio, resetear todo
+        // Si no hay señal detectada, resetear
         if (!rawResult.hasChange) {
-            // Solo actualizar si había algo en progreso
             if (consecutiveChangeCount > 0 || isChangeConfirmed) {
                 consecutiveChangeCount = 0
                 isChangeConfirmed = false
-                lastConfirmedResult = null
                 
-                return DetectionResult(
-                    hasChange = false,
-                    confidence = 0f,
-                    message = "Cambio no confirmado - se perdió la señal"
+                return rawResult.copy(
+                    message = "Señal no confirmada - se perdió (${rawResult.message})"
                 )
             }
-            
-            // Sin cambio detectado, mantener estado neutral
             return rawResult
         }
         
-        // El detector detecta cambio, aplicar lógica de estabilización
+        // Hay señal, aplicar estabilización
         
-        // Verificar timeout: si pasó mucho tiempo desde última detección, resetear
+        // Verificar timeout
         if (lastDetectionTimestamp > 0 && (now - lastDetectionTimestamp) > stabilizationTimeoutMs) {
             consecutiveChangeCount = 0
             isChangeConfirmed = false
         }
         
-        // Incrementar contador de detecciones consecutivas
         consecutiveChangeCount++
         lastDetectionTimestamp = now
         
         // Verificar si alcanzamos el umbral para confirmar
         if (consecutiveChangeCount >= consecutiveDetectionsRequired) {
-            // Cambio confirmado
             if (!isChangeConfirmed) {
                 isChangeConfirmed = true
                 
-                // Primera vez que confirmamos - construir mensaje informativo
-                val confirmedResult = DetectionResult(
-                    hasChange = true,
-                    confidence = rawResult.confidence,
-                    message = "✓ Cambio CONFIRMADO (${consecutiveChangeCount}/${consecutiveDetectionsRequired} análisis consecutivos)"
+                return rawResult.copy(
+                    message = "✓ ${rawResult.detectedSignal.name} CONFIRMADO (${consecutiveChangeCount}/${consecutiveDetectionsRequired} análisis)"
                 )
-                lastConfirmedResult = confirmedResult
-                return confirmedResult
             } else {
-                // Cambio ya estaba confirmado, seguir reportando
-                return DetectionResult(
-                    hasChange = true,
-                    confidence = rawResult.confidence,
-                    message = "Cambio confirmado persiste (${consecutiveChangeCount} análisis)"
+                return rawResult.copy(
+                    message = "${rawResult.detectedSignal.name} confirmado persiste (${consecutiveChangeCount} análisis)"
                 )
             }
         } else {
-            // Detectando pero aún no confirmado
-            return DetectionResult(
-                hasChange = false, // IMPORTANTE: aún no confirmado
+            // Señal detectada pero aún no confirmada
+            return rawResult.copy(
+                hasChange = false, // No confirmar todavía
                 confidence = rawResult.confidence * (consecutiveChangeCount / consecutiveDetectionsRequired.toFloat()),
-                message = "Detectando... (${consecutiveChangeCount}/${consecutiveDetectionsRequired}) - Esperando confirmación"
+                message = "Detectando ${rawResult.detectedSignal.name}... (${consecutiveChangeCount}/${consecutiveDetectionsRequired})"
             )
         }
     }
@@ -284,21 +308,8 @@ class MonitoringManager(
     }
     
     companion object {
-        /**
-         * Intervalo entre análisis: 500ms (2 veces por segundo)
-         */
         const val ANALYSIS_INTERVAL_MS = 500L
-        
-        /**
-         * Número default de detecciones consecutivas requeridas para confirmar cambio.
-         * Con análisis cada 500ms, 3 detecciones = 1-1.5 segundos de cambio sostenido.
-         */
         const val DEFAULT_CONSECUTIVE_DETECTIONS = 3
-        
-        /**
-         * Timeout default para estabilización: 2000ms (2 segundos).
-         * Si entre detecciones pasa más tiempo, se resetea el contador.
-         */
         const val DEFAULT_STABILIZATION_TIMEOUT_MS = 2000L
     }
 }
