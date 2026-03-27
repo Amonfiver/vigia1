@@ -46,7 +46,10 @@ package com.vigia.app.classification
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.vigia.app.detection.ColorFrameData
+import com.vigia.app.detection.TransferSubRoiDetector
+import com.vigia.app.detection.TransferSubRoiResult
 import com.vigia.app.domain.model.ClassLabel
+import com.vigia.app.domain.model.Roi
 import com.vigia.app.domain.model.TrainingSample
 
 /**
@@ -474,3 +477,19 @@ data class DatasetStats(
         return "Dataset: $totalSamples muestras (OK:$okCount, OBST:$obstaculoCount, FALL:$falloCount) - ${if (isReady) "✓ Listo" else "⚠ Insuficiente"}"
     }
 }
+
+/**
+ * Información del match más cercano para comparación visual.
+ * Usado en la UI para mostrar contra qué muestra entrenada se compara.
+ *
+ * @property sampleId ID de la muestra más cercana
+ * @property label Clase de la muestra
+ * @property similarity Similitud (0.0-1.0)
+ * @property sampleImage Bitmap de la muestra entrenada (nullable para lazy loading)
+ */
+data class TopMatchInfo(
+    val sampleId: String,
+    val label: ClassLabel,
+    val similarity: Float,
+    val sampleImage: android.graphics.Bitmap? = null
+)

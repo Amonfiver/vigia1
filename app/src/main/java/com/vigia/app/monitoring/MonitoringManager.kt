@@ -74,11 +74,13 @@ enum class DatasetSyncUiState {
  * Incluye:
  * - Capa de estabilización: requiere detecciones consecutivas antes de confirmar
  * - Soporte para análisis cromático (HSV) y legacy (luminancia)
- * - Subregión activa dentro del ROI global
- * - Clasificación automática con caché de features del dataset
+ * - Subregión activa dentro del ROI global usando TransferSubRoiDetector
+ * - Clasificación automática con caché de features del dataset usando SOLO la subROI del transfer
+ * - Observabilidad visual: ROI global, subROI efectiva, crop actual, top match
  *
  * @param colorDetector Detector cromático a utilizar (default: ColorBasedDetector)
  * @param legacyDetector Detector legacy para compatibilidad (default: SimpleFrameDifferenceDetector)
+ * @param subRoiDetector Detector de subROI del transfer (default: TransferSubRoiDetector)
  * @param scope CoroutineScope para lanzar el análisis periódico
  * @param consecutiveDetectionsRequired Número de detecciones consecutivas requeridas
  * @param stabilizationTimeoutMs Tiempo máximo entre detecciones antes de resetear
@@ -86,6 +88,7 @@ enum class DatasetSyncUiState {
 class MonitoringManager(
     private val colorDetector: ColorBasedDetector = ColorBasedDetector(),
     private val legacyDetector: RoiDetector = SimpleFrameDifferenceDetector(threshold = 30),
+    private val subRoiDetector: TransferSubRoiDetector = TransferSubRoiDetector(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val consecutiveDetectionsRequired: Int = DEFAULT_CONSECUTIVE_DETECTIONS,
     private val stabilizationTimeoutMs: Long = DEFAULT_STABILIZATION_TIMEOUT_MS
@@ -111,6 +114,21 @@ class MonitoringManager(
      * Permite visualizar en UI qué parte del ROI se está analizando.
      */
     val activeSubRegion: StateFlow<SubRegion?> = _activeSubRegion.asStateFlow()
+
+    // === Información de la subROI del transfer detectada (para observabilidad) ===
+    private val _transferSubRoiResult = MutableStateFlow<TransferSubRoiResult?>(null)
+    /**
+     * Resultado de la detección de subROI del transfer.
+     * Permite visualizar qué parte del ROI se está usando para clasificación.
+     */
+    val transferSubRoiResult: StateFlow<TransferSubRoiResult?> = _transferSubRoiResult.asStateFlow()
+
+    // === Información del top match para comparación visual ===
+    private val _topMatchInfo = MutableStateFlow<TopMatchInfo?>(null)
+    /**
+     * Información del match más cercano para comparación visual.
+     */
+    val topMatchInfo: StateFlow<TopMatchInfo?> = _topMatchInfo.asStateFlow()
 
     // === Clasificación automática basada en dataset ===
     private val _classificationResult = MutableStateFlow<ClassificationResult?>(null)
@@ -376,13 +394,52 @@ class MonitoringManager(
 
     /**
      * Realiza clasificación automática del frame actual contra el dataset cacheado.
-     * Usa las features precalculadas en caché (sin decodificación JPEG).
+     * Usa la subROI del transfer para extraer features, no el ROI completo.
+     * 
+     * Proceso:
+     * 1. Detectar subROI del transfer dentro del ROI global
+     * 2. Extraer sub-frame correspondiente a la subROI
+     * 3. Extraer features de la subROI (no del ROI completo)
+     * 4. Comparar contra dataset cacheado
+     * 5. Actualizar información de top match para observabilidad
      */
     private fun performClassification(frameData: ColorFrameData) {
-        val result = datasetClassifier.classify(frameData)
+        val roi = currentRoi ?: return
+        
+        // Paso 1: Detectar subROI del transfer
+        val subRoiResult = subRoiDetector.detectTransferSubRoi(frameData, roi)
+        _transferSubRoiResult.value = subRoiResult
+        
+        // Paso 2: Extraer sub-frame de la subROI detectada
+        val absoluteSubRegion = subRoiResult.toAbsoluteCoordinates(roi)
+        val subFrameData = try {
+            frameData.extractRegion(
+                absoluteSubRegion.left,
+                absoluteSubRegion.top,
+                absoluteSubRegion.right,
+                absoluteSubRegion.bottom
+            )
+        } catch (e: Exception) {
+            // Si falla la extracción, usar frame completo
+            frameData
+        }
+        
+        // Paso 3: Clasificar usando SOLO la subROI
+        val result = datasetClassifier.classify(subFrameData)
         _classificationResult.value = result
         
-        // Actualizar estadísticas de caché periódicamente (cada clasificación por simplicidad)
+        // Paso 4: Actualizar información del top match
+        val topMatch = result.topMatches.firstOrNull()
+        if (topMatch != null) {
+            _topMatchInfo.value = TopMatchInfo(
+                sampleId = topMatch.sampleId,
+                label = topMatch.label,
+                similarity = topMatch.similarity,
+                sampleImage = null // Se cargaría bajo demanda si es necesario
+            )
+        }
+        
+        // Actualizar estadísticas de caché
         _cacheStats.value = datasetClassifier.getCacheStats()
     }
 

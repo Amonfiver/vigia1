@@ -55,6 +55,8 @@ import com.vigia.app.alert.ConfirmationState
 import com.vigia.app.camera.FrameProcessor
 import com.vigia.app.classification.ClassificationResult
 import com.vigia.app.classification.CacheStats
+import com.vigia.app.classification.TopMatchInfo
+import com.vigia.app.detection.TransferSubRoiResult
 import com.vigia.app.data.local.FileTrainingDatasetRepository
 import com.vigia.app.detection.DetectionResult
 import com.vigia.app.detection.FrameData
@@ -162,7 +164,14 @@ data class MainUiState(
     val classificationResult: ClassificationResult? = null,
     val datasetSyncStatus: DatasetSyncUiState = DatasetSyncUiState.EMPTY,
     val datasetStats: com.vigia.app.classification.DatasetStats = com.vigia.app.classification.DatasetStats(0, 0, 0, 0, false),
-    val cacheStats: CacheStats? = null
+    val cacheStats: CacheStats? = null,
+    // SubROI y observabilidad visual
+    val transferSubRoiResult: TransferSubRoiResult? = null,
+    val topMatchInfo: TopMatchInfo? = null,
+    // Inspección visual
+    val showRoiInspection: Boolean = false,
+    val showSubRoiInspection: Boolean = false,
+    val showTopMatchComparison: Boolean = false
 )
 
 /**

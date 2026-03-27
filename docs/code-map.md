@@ -16,34 +16,38 @@ app/src/main/java/com/vigia/app/
 ├── camera/                            # Captura y procesamiento de frames
 │   ├── CameraPreview.kt               # Preview + ImageAnalysis use case (soporte cromático)
 │   └── FrameProcessor.kt              # Analizador YUV → HSV (color) + captura imagen
+├── classification/                    # Clasificación automática basada en dataset
+│   ├── ColorFeatures.kt               # Features HSV (histograma + estadísticas)
+│   └── DatasetClassifier.kt           # Clasificador k-NN con caché de features, TopMatchInfo
 ├── data/                              # Persistencia
 │   └── local/
 │       ├── DataStoreRoiRepository.kt  # Persistencia de ROI
 │       ├── DataStoreTelegramConfigRepository.kt # Persistencia Telegram
 │       ├── FileOkBaselineRepository.kt # Baseline OK legacy (obsoleto)
-│       └── FileTrainingDatasetRepository.kt # NUEVO: Dataset entrenamiento OK/OBSTACULO/FALLO
+│       └── FileTrainingDatasetRepository.kt # Dataset entrenamiento OK/OBSTACULO/FALLO
 ├── detection/                         # Lógica de detección
 │   ├── RoiDetector.kt                 # Interfaz del detector (legacy)
 │   ├── SimpleFrameDifferenceDetector.kt # Implementación simple luminancia (legacy)
 │   ├── ColorFrameData.kt              # Estructura de datos cromáticos HSV
-│   └── ColorBasedDetector.kt          # Detector basado en análisis cromático
+│   ├── ColorBasedDetector.kt          # Detector basado en análisis cromático
+│   └── TransferSubRoiDetector.kt      # NUEVO: Detector de subROI del transfer por color
 ├── domain/                            # Modelos y contratos
 │   ├── model/
 │   │   ├── Roi.kt                     # Entidad ROI
 │   │   ├── TelegramConfig.kt          # Entidad config Telegram
 │   │   ├── OkBaselineSample.kt        # Baseline OK legacy
-│   │   └── TrainingSample.kt          # NUEVO: Muestras de entrenamiento etiquetadas
+│   │   └── TrainingSample.kt          # Muestras de entrenamiento etiquetadas
 │   └── repository/
 │       ├── RoiRepository.kt           # Interfaz persistencia ROI
 │       ├── TelegramConfigRepository.kt # Interfaz persistencia Telegram
 │       ├── OkBaselineRepository.kt    # Interfaz baseline OK legacy
-│       └── TrainingDatasetRepository.kt # NUEVO: Interfaz dataset entrenamiento
+│       └── TrainingDatasetRepository.kt # Interfaz dataset entrenamiento
 ├── monitoring/                        # Coordinación vigilancia + estabilización
-│   └── MonitoringManager.kt           # Estado vigilancia + análisis cromático periódico
+│   └── MonitoringManager.kt           # Estado vigilancia + análisis cromático periódico + subROI + clasificación
 ├── telegram/                          # Envío de alertas
 │   └── TelegramService.kt             # Servicio Telegram con OkHttp
 ├── ui/                                # Interfaz de usuario
-│   ├── MainViewModel.kt               # ViewModel principal (entrenamiento, baseline, vigilancia)
+│   ├── MainViewModel.kt               # ViewModel principal (entrenamiento, baseline, vigilancia, subROI, top match)
 │   └── components/
 │       ├── RoiOverlay.kt              # Dibuja ROI sobre cámara
 │       └── RoiSelector.kt             # Selector táctil de ROI
@@ -55,7 +59,26 @@ app/src/main/java/com/vigia/app/
 
 ## Flujo de datos principal
 
-### Modo de entrenamiento supervisado (NUEVO)
+### Clasificación con subROI del transfer (NUEVO)
+```
+ColorFrameData (frame completo)
+  ↓
+TransferSubRoiDetector.detectTransferSubRoi()
+  ↓
+Detecta subROI del transfer (excluye fondo blanco/negro)
+  ↓
+Extrae sub-frame de la subROI (extractRegion)
+  ↓
+DatasetClassifier.classify(subFrame)
+  ↓
+Extrae features de la subROI (NO del ROI completo)
+  ↓
+Compara contra caché de features del dataset
+  ↓
+ClassificationResult + TopMatchInfo
+```
+
+### Modo de entrenamiento supervisado
 ```
 UI (MainActivity)
   ↓
@@ -89,7 +112,7 @@ CameraX → FrameProcessor → ColorFrameData (HSV)
                          MainViewModel → UI
 ```
 
-### Clasificación automática basada en dataset (NUEVO)
+### Clasificación automática basada en dataset
 ```
 Al iniciar vigilancia:
 MainViewModel.startMonitoring()
@@ -105,15 +128,19 @@ Cache en memoria: Map<sampleId, CachedSampleFeatures>
 Durante vigilancia (cada 500ms):
 FrameProcessor → ColorFrameData
   ↓
-MonitoringManager.performClassification()
+TransferSubRoiDetector.detectTransferSubRoi() → subROI del transfer
   ↓
-DatasetClassifier.classify(ColorFrameData)
+Extrae sub-frame de la subROI
   ↓
-Extrae features del frame actual (1 vez)
+DatasetClassifier.classify(subFrame)
+  ↓
+Extrae features de la subROI (1 vez)
   ↓
 Compara contra caché de features (O(n), sin decodificación)
   ↓
 ClassificationResult → UI (clase, confianza, scores)
+  ↓
+TopMatchInfo → UI (muestra más cercana, similitud)
 ```
 
 ### Alertas automáticas
@@ -142,13 +169,29 @@ MonitoringManager.detectionResult → MainViewModel
 - Métodos: `getLastFrameBitmap()`, `getRoiCrop()`, `getRegionCrop()`
 - Frecuencia: 1 de cada 5 frames (~6fps)
 
+### TransferSubRoiDetector (detection/TransferSubRoiDetector.kt) - NUEVO
+- Detecta la subregión del transfer dentro del ROI global
+- **Estrategia COLOR_MASK**: Detecta píxeles con color (no blancos, no negros)
+- **Heurística**: `isColorfulPixel()` con umbrales de saturación/value
+- **Bounding box**: Calcula región de píxeles candidatos
+- **Validación**: Verifica tamaño razonable (30%-90% del ROI)
+- **Fallback**: `CENTERED_HEURISTIC` (60% centro) si color falla
+- **Observabilidad**: `TransferSubRoiResult` con método, confianza, estadísticas
+
 ### MonitoringManager (monitoring/MonitoringManager.kt)
 - Coordina vigilancia activa + estabilización + clasificación
 - Análisis cada 500ms usando ColorBasedDetector
-- Subregión activa: 60% centro con sesgo vertical 0.4
+- **NUEVO**: Integra TransferSubRoiDetector para clasificación con subROI
+- **Pipeline de clasificación**:
+  1. Detectar subROI del transfer
+  2. Extraer sub-frame de la subROI
+  3. Extraer features de la subROI
+  4. Comparar contra dataset cacheado
+- Subregión activa: Detectada automáticamente por color (con fallback)
 - Estabilización: 3 detecciones consecutivas antes de confirmar
 - **CLASIFICACIÓN AUTOMÁTICA**: Integra DatasetClassifier con sincronización
 - Estado de sincronización: DatasetSyncUiState (EMPTY, SYNCING, SYNCED, STALE)
+- Estados de observabilidad: `transferSubRoiResult`, `topMatchInfo`
 - Resincronización: `forceResyncDataset()` para actualizar caché
 
 ### ColorBasedDetector (detection/ColorBasedDetector.kt)
@@ -156,10 +199,11 @@ MonitoringManager.detectionResult → MainViewModel
 - Naranja (Hue 15-35), Rojo (Hue 0-15 o 230-255)
 - Umbral: 5% de píxeles (provisionales)
 
-### DatasetClassifier (classification/DatasetClassifier.kt) - NUEVO
+### DatasetClassifier (classification/DatasetClassifier.kt)
 - Clasificador k-NN (k=3) basado en features HSV
 - **CACHÉ DE FEATURES**: Precalcula features del dataset en sincronización
 - Estructura: `CachedSampleFeatures` almacena features por muestra
+- **NUEVO**: `TopMatchInfo` para comparación visual contra muestra más cercana
 - Método `syncDataset()`: Decodifica JPEGs y precalcula features (costoso, una vez)
 - Método `classify()`: Compara features contra caché (rápido, O(n))
 - Estado: `DatasetSyncStatus` (EMPTY, SYNCED, STALE)
@@ -172,6 +216,10 @@ MonitoringManager.detectionResult → MainViewModel
   - `selectedTrainingClass`: clase actual (OK/OBSTACULO/FALLO)
   - `captureTrainingSample()`: captura y guarda muestra
   - `clearTrainingClass()`: reinicia clase específica
+- **NUEVO - Observabilidad subROI**:
+  - `transferSubRoiResult`: resultado de detección de subROI
+  - `topMatchInfo`: información del match más cercano
+  - Flags de inspección: `showRoiInspection`, `showSubRoiInspection`, `showTopMatchComparison`
 - **Baseline OK** (legacy): métodos mantenidos para compatibilidad
 - **Vigilancia**: start/stop monitoring, alertas
 
@@ -192,6 +240,10 @@ MonitoringManager.detectionResult → MainViewModel
   - `ClassCounters`: contadores X/50 por clase
   - `TrainingCaptureButton`: captura con feedback
   - `TrainingManagementButtons`: reiniciar/volver
+- **UI de clasificación**:
+  - `ClassificationSection`: clase estimada, confianza, scores por clase
+  - Estado de sincronización del dataset
+  - Botón de resincronización
 
 ---
 
@@ -208,8 +260,11 @@ Modificar parámetros en constructor de MonitoringManager:
 - `consecutiveDetectionsRequired`: número de detecciones (default: 3)
 - `stabilizationTimeoutMs`: timeout entre detecciones (default: 2000ms)
 
-### Para mejorar detección
-Crear nuevo detector implementando lógica de comparación contra dataset entrenado, inyectar en MonitoringManager.
+### Para mejorar detección de subROI
+Modificar parámetros en constructor de TransferSubRoiDetector:
+- `minColorfulness`: umbral de saturación para píxel colorido (default: 40)
+- `minSubRoiSize`: tamaño mínimo de subROI (default: 0.3 = 30%)
+- `maxSubRoiSize`: tamaño máximo de subROI (default: 0.9 = 90%)
 
 ---
 
@@ -239,6 +294,7 @@ Crear nuevo detector implementando lógica de comparación contra dataset entren
 - Inyección de dependencias: Constructor-based
 - Estado reactivo: StateFlow en todos los niveles
 - **NUEVO**: Modo entrenamiento supervisado con 3 clases
+- **NUEVO**: Clasificación con subROI del transfer (ignora fondo de la vía)
 - Dataset local preparado para clasificación futura
 
 ## Estado de infraestructura
@@ -247,7 +303,7 @@ Crear nuevo detector implementando lógica de comparación contra dataset entren
 - **Android Gradle Plugin**: 8.2.2
 - **Kotlin**: 1.9.22
 - **Estado de build**: ✅ COMPILA CORRECTAMENTE
-- **Warnings**: 3 menores (no bloqueantes)
+- **Warnings**: 6 menores (deprecated, parámetros no usados)
 
 ### Comandos útiles
 

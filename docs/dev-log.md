@@ -1473,4 +1473,134 @@ Se añadió en `MonitoringManager` y `MainViewModel`:
 
 ---
 
-## Entrada 022 - [Siguiente fase pendiente]
+## Entrada 022 - Refinamiento de clasificación con subROI del transfer
+
+### Fecha
+2026-03-27
+
+### Objetivo
+Mejorar la discriminación de la clasificación automática haciendo que compare solo el cuerpo del transfer en lugar de toda la vía, y mejorar la observabilidad visual del sistema.
+
+### Contexto del problema
+La clasificación no era suficientemente discriminativa durante la vigilancia real. Aunque se provocaban estados visualmente distintos, el sistema tendía a mantener una predicción dominante de `OK` con scores poco significativos (ej: OK ~63%, FALLO ~34%), incluso cuando visualmente debería haber una separación clara.
+
+Causa raíz: El ROI definido por el usuario cubría toda la vía del transfer, introduciendo demasiado fondo estructural estable (fondo blanco, dos líneas negras paralelas, gran área no informativa). La región semánticamente relevante no es toda la vía, sino el **cuerpo rectangular del transfer**.
+
+### Qué se implementó
+
+#### 1. Detector de subROI del transfer (TransferSubRoiDetector)
+Nuevo archivo `detection/TransferSubRoiDetector.kt` con:
+- **Estrategia COLOR_MASK**: Detecta píxeles con color significativo (no blancos, no negros)
+- **Heurística**: `isColorfulPixel()` verifica saturación y value para excluir fondo
+- **Bounding box**: Calcula región que contiene el transfer basado en densidad de píxeles coloridos
+- **Validación**: Verifica que la subROI tenga tamaño razonable (30%-90% del ROI)
+- **Fallback**: Si la detección por color falla, usa heurística centrada 60%
+- **Observabilidad**: `TransferSubRoiResult` con método usado, confianza, estadísticas
+
+#### 2. Clasificación usando solo subROI
+Modificado `monitoring/MonitoringManager.kt`:
+- Integración de `TransferSubRoiDetector` como dependencia
+- Pipeline de clasificación actualizado:
+  1. Detectar subROI del transfer dentro del ROI global
+  2. Extraer sub-frame correspondiente a la subROI (`extractRegion`)
+  3. Extraer features de la subROI (no del ROI completo)
+  4. Comparar contra dataset cacheado usando solo esas features
+- Estados expuestos: `transferSubRoiResult`, `topMatchInfo`
+
+#### 3. Información de top match para comparación
+Modificado `classification/DatasetClassifier.kt`:
+- Nuevo `TopMatchInfo` con sampleId, label, similitud, imagen (lazy)
+- Expuesto a través de `MonitoringManager.topMatchInfo`
+
+#### 4. Estados de UI para inspección visual
+Modificado `ui/MainViewModel.kt`:
+- Nuevos estados: `transferSubRoiResult`, `topMatchInfo`
+- Flags de inspección: `showRoiInspection`, `showSubRoiInspection`, `showTopMatchComparison`
+
+### Estrategia de detección de subROI
+
+**Método 1: COLOR_MASK (preferido)**
+```
+Para cada píxel en ROI:
+  Si pixel.saturación >= 40 AND pixel.value >= 30 AND NOT (pixel.saturación < 20 AND pixel.value > 200):
+    Marcar como candidato a transfer
+    
+Calcular bounding box de todos los candidatos
+Validar: área entre 30% y 90% del ROI
+```
+
+**Método 2: CENTERED_HEURISTIC (fallback)**
+```
+Usar SubRegion.centered(0.6f, 0.4f) - 60% del área central con sesgo vertical
+```
+
+**Método 3: FULL_ROI (último recurso)**
+```
+Usar ROI completo si todo lo demás falla
+```
+
+### Archivos creados
+- `detection/TransferSubRoiDetector.kt` (280 líneas) - Detector de subROI basado en color
+
+### Archivos modificados
+- `classification/DatasetClassifier.kt` - Añadido `TopMatchInfo`
+- `monitoring/MonitoringManager.kt` - Integración de subROI en pipeline de clasificación
+- `ui/MainViewModel.kt` - Estados para observabilidad
+
+### Tracking de subtareas
+
+- [x] Crear TransferSubRoiDetector con heurística de color
+- [x] Implementar detección de píxeles candidatos a transfer (excluir blanco/negro)
+- [x] Implementar cálculo de bounding box de la región colorida
+- [x] Implementar validación de tamaño de subROI
+- [x] Implementar fallback a heurística centrada
+- [x] Integrar detector en MonitoringManager
+- [x] Modificar pipeline de clasificación para usar subROI
+- [x] Añadir TopMatchInfo para comparación visual
+- [x] Exponer estados en MainViewModel
+- [x] Verificar compilación exitosa
+- [ ] Implementar UI completa de inspección visual (diferida a futura iteración)
+
+### Estado de build
+✅ COMPILA CORRECTAMENTE (6 warnings menores)
+
+### Cómo verificar manualmente
+
+1. **Preparar dataset de entrenamiento**:
+   - Entrar en modo entrenamiento
+   - Capturar 5-10+ muestras de cada clase (OK, OBSTACULO, FALLO)
+
+2. **Iniciar vigilancia**:
+   - Definir ROI sobre toda la vía del transfer
+   - Iniciar monitorización
+   - Dataset se sincroniza automáticamente
+
+3. **Verificar clasificación con subROI**:
+   - La clasificación ahora usa solo la subROI del transfer detectada
+   - El método de detección aparece en logs/estado
+   - La discriminación debería ser mejor que con ROI completo
+
+4. **Observar detección de subROI**:
+   - `transferSubRoiResult` indica qué método se usó (COLOR_MASK, CENTERED_HEURISTIC, FULL_ROI)
+   - La confianza de la detección está disponible
+   - Estadísticas de píxeles candidatos disponibles
+
+### Limitaciones temporales
+- **UI de inspección visual no implementada**: Los estados están expuestos pero no hay UI completa todavía para mostrar ROI, subROI, crop actual, comparación top-1
+- Parámetros de detección fijos (no adaptativos)
+- Sin debug visual de la máscara de color (método `generateDebugMaskBitmap` existe pero no integrado en UI)
+
+### Fase cerrada
+✅ **Refinamiento de clasificación con subROI del transfer CERRADA**
+
+La clasificación ahora opera principalmente sobre el cuerpo del transfer, ignorando el fondo estructural de la vía. Los estados para observabilidad visual están implementados y expuestos.
+
+### Siguiente paso
+Implementar UI de inspección visual para aprovechar los nuevos estados:
+- Botón "Ver ROI" - muestra crop del ROI global
+- Botón "Ver subROI" - muestra crop de la subregión usada para clasificar
+- Botón "Ver comparación" - muestra crop actual vs muestra top-1 del dataset
+
+---
+
+## Entrada 023 - [Siguiente fase pendiente]

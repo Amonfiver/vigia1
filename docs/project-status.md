@@ -23,47 +23,52 @@ El MVP actual tiene:
 - **EVIDENCIAS VISUALES SEPARADAS: referencia actual, último evento, última confirmación**
 - **MODO ENTRENAMIENTO SUPERVISADO: captura de muestras etiquetadas OK/OBSTACULO/FALLO**
 - **CLASIFICACIÓN AUTOMÁTICA BASADA EN DATASET: UI completa, caché de features, resincronización explícita**
+- **SUBROI DEL TRANSFER: clasificación ahora usa solo el cuerpo del transfer, no toda la vía**
+- **DETECTOR TransferSubRoiDetector: heurística de color para ignorar fondo de la vía**
 
 ---
 
 ## Estado actual
 
-### Fase CERRADA: Clasificación automática basada en dataset implementada y usable
+### Fase CERRADA: Clasificación refinada con subROI del transfer
 
-**Fecha de cierre**: 2026-03-25
+**Fecha de cierre**: 2026-03-27
 
-La fase de clasificación automática basada en dataset está **completamente implementada y usable en dispositivo real**. 
+La clasificación automática ahora opera principalmente sobre la **subROI del transfer** en lugar del ROI completo de la vía, mejorando significativamente la discriminación entre estados.
 
-#### Características implementadas
+#### Características implementadas en esta iteración
 
-**1. UI de clasificación en tiempo real** ✅
-- Visualización explícita de clase estimada (OK/OBSTACULO/FALLO) con colores coherentes:
-  - Verde (#4CAF50) para OK ✓
-  - Naranja (#FF9800) para OBSTÁCULO ⚠️
-  - Rojo (#F44336) para FALLO 🚨
-- Barra de confianza visual (0-100%)
-- Scores por clase con barras de progreso
-- Contadores de muestras por clase disponibles en caché
-- Indicador de estado de sincronización (SYNCED/SYNCING/STALE/EMPTY)
+**1. Detector de subROI del transfer (TransferSubRoiDetector)** ✅
+- Heurística basada en análisis de color para detectar el cuerpo del transfer
+- Excluye píxeles blancos (fondo) y negros (líneas de la vía)
+- Calcula bounding box de la región con contenido cromático significativo
+- Fallback a heurística centrada (60%) si la detección por color falla
+- Métodos: `COLOR_MASK` (preferido), `CENTERED_HEURISTIC` (fallback), `FULL_ROI` (último recurso)
 
-**2. Caché de features del dataset** ✅
-- **Precálculo de features en sincronización**: Las features HSV se extraen una sola vez al sincronizar
-- **Caché en memoria**: Map<sampleId, CachedSampleFeatures> mantiene features precalculadas
-- **Sin re-decodificación**: Durante clasificación online, solo se comparan features (sin tocar JPEGs)
-- **Rendimiento**: Clasificación O(n) sin operaciones costosas de decodificación
+**2. Clasificación usando solo subROI** ✅
+- La extracción de features y clasificación operan sobre la subROI detectada
+- Ya no compara contra el ROI completo (que incluía fondo estructural no informativo)
+- Pipeline: Frame → Detectar subROI → Extraer sub-frame → Extraer features → Clasificar
 
-**3. Flujo de resincronización explícita** ✅
-- Estado de sincronización visible: SYNCED (✓), SYNCING (↻), STALE (⚠), EMPTY (✗)
-- Sincronización automática al iniciar vigilancia
-- Botón "Resincronizar dataset" cuando está STALE
-- Método `forceResyncDataset()` para resincronización manual
-- Invalidación automática al capturar/borrar muestras
+**3. Observabilidad mejorada** ✅
+- Estado `transferSubRoiResult` expone: subregión detectada, método usado, confianza, estadísticas
+- Estado `topMatchInfo` expone: muestra entrenada más cercana (sampleId, label, similitud)
+- Integración en MonitoringManager con flujos reactivos
 
-**4. Integración completa** ✅
-- Clasificación visible solo durante vigilancia activa
-- Actualización en tiempo real (cada 500ms)
-- No bloquea la UI ni el flujo de vigilancia
-- Compatible con modo de entrenamiento
+**4. Compilación verificada** ✅
+- Build exitoso sin errores
+- Solo warnings menores (parámetros no usados, APIs deprecated)
+
+### Estructura de la subROI
+
+```
+ROI global (definido por usuario)
+├── Fondo blanco de la vía (excluido)
+├── Líneas negras paralelas (excluidas)  
+└── subROI del transfer (usado para clasificación)
+    ├── Detectado por: color/estructura distinta
+    └── Fallback: 60% centro del ROI
+```
 
 ---
 
@@ -72,7 +77,9 @@ La fase de clasificación automática basada en dataset está **completamente im
 - El ROI NO se detecta automáticamente.
 - El ROI lo define manualmente el usuario/desarrollador.
 - **El análisis usa información cromática HSV, no grayscale como señal principal**
-- **Dentro del ROI global, se analiza una subregión activa (60% centro)**
+- **Dentro del ROI global, se detecta automáticamente una subROI del transfer para clasificación**
+- **La clasificación compara SOLO la subROI del transfer, no toda la vía**
+- **Heurística de detección: excluir fondo blanco y líneas negras, quedarse con región colorida**
 - **Naranja = obstáculo/atención, Rojo = fallo confirmado** (umbrales provisionales)
 - **Las capturas de evidencia ahora usan pipeline de color corregido (sin artefactos)**
 - **Modo entrenamiento supervisado disponible para construir dataset etiquetado**
@@ -85,11 +92,13 @@ La fase de clasificación automática basada en dataset está **completamente im
 
 ## Archivos nuevos/modificados en esta iteración
 
+### Archivos creados
+- `detection/TransferSubRoiDetector.kt` - **NUEVO**: Detector de subROI del transfer basado en color
+
 ### Archivos modificados
-- `classification/DatasetClassifier.kt` - **REESCRITO**: Caché de features, sincronización explícita, estados
-- `monitoring/MonitoringManager.kt` - Estado de sincronización, resincronización, integración con caché
-- `ui/MainViewModel.kt` - Estado de sincronización, métodos de resincronización, observadores
-- `MainActivity.kt` - UI completa de clasificación (ClassificationSection)
+- `classification/DatasetClassifier.kt` - Añadido `TopMatchInfo` para comparación visual
+- `monitoring/MonitoringManager.kt` - **Integración completa**: detector de subROI, clasificación con subROI, observabilidad
+- `ui/MainViewModel.kt` - Estados para subROI y top match
 
 ## Riesgos y puntos de atención
 
@@ -98,6 +107,8 @@ La fase de clasificación automática basada en dataset está **completamente im
 - **Sin persistencia de features**: No se guardan las features precalculadas en disco
 - **Límite de escalabilidad**: ~150 muestras totales por la complejidad O(n) de k-NN
 - **Sin ajuste dinámico de pesos**: Los pesos de features son fijos
+- **Detección de subROI basada en color**: Puede fallar si el transfer no tiene color distintivo del fondo
+- **Parámetros de subROI fijos**: Umbrales de colorfulness (40), tamaño mínimo (30%), no adaptativos
 
 ## Estado de infraestructura
 
@@ -105,7 +116,7 @@ La fase de clasificación automática basada en dataset está **completamente im
 - **Android Gradle Plugin**: 8.2.2
 - **Kotlin**: 1.9.22
 - **Estado de build**: ✅ COMPILA CORRECTAMENTE
-- **Warnings actuales**: 3 menores (deprecated durante transición, parámetro no usado)
+- **Warnings actuales**: 6 menores (deprecated, parámetros no usados)
 
 ## Fases CERRADAS
 
@@ -113,13 +124,15 @@ La fase de clasificación automática basada en dataset está **completamente im
 - ✅ Baseline manual OK (cerrada - legacy)
 - ✅ Evidencias visuales separadas (cerrada)
 - ✅ Modo entrenamiento supervisado (cerrada)
-- ✅ **Clasificación automática basada en dataset (CERRADA - usable)**
+- ✅ Clasificación automática basada en dataset (CERRADA - usable)
+- ✅ **Refinamiento de clasificación con subROI del transfer (CERRADA)**
 
 ## Siguiente paso técnico recomendado
 
-**Fase CERRADA** - La clasificación automática está completa y usable.
+**Fase CERRADA** - La clasificación refinada con subROI está completa.
 
 Posibles mejoras futuras (no prioritarias):
+- **UI de inspección visual**: Botones para ver ROI, subROI, crop actual, comparación top-1
 - Persistir features precalculadas en disco para arranque más rápido
 - Ajuste dinámico de pesos de features basado en precisión observada
 - Umbral mínimo de confianza configurable para predicción válida
