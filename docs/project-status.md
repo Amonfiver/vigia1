@@ -127,12 +127,111 @@ ROI global (definido por usuario)
 - ✅ Clasificación automática basada en dataset (CERRADA - usable)
 - ✅ **Refinamiento de clasificación con subROI del transfer (CERRADA)**
 
+## Fase CERRADA: Observabilidad visual completa en UI
+
+**Fecha de cierre**: 2026-03-27
+
+La observabilidad visual de la clasificación está completamente implementada y usable en dispositivo móvil.
+
+### Características implementadas en esta iteración
+
+**1. Sección de inspección visual (VisualInspectionSection)** ✅
+- Tarjeta desplegable en UI durante vigilancia activa
+- Tres botones toggle para mostrar/ocultar vistas:
+  - **ROI Global**: Crop completo del área definida por el usuario
+  - **SubROI**: Crop de la subregión del transfer detectada
+  - **Top Match**: Comparación visual contra la muestra más similar del dataset
+
+**2. Visualización de ROI global** ✅
+- Muestra el crop completo del ROI definido por el usuario
+- Imagen en color, actualizada en tiempo real
+- Etiqueta clara: "ROI Global (definido por usuario)"
+
+**3. Visualización de subROI efectiva** ✅
+- Muestra el crop de la subregión usada realmente para clasificación
+- Incluye información del método de detección (COLOR_MASK, CENTERED_HEURISTIC, FULL_ROI)
+- Muestra descripción de la subregión detectada
+- Esta es la imagen que se usa para extraer features y clasificar
+
+**4. Comparación visual top-1 del dataset** ✅
+- Vista lado a lado: imagen actual vs muestra entrenada más similar
+- Muestra etiqueta de clase del top match (con color: verde/naranja/rojo)
+- Muestra score de similitud (0-100%)
+- Permite verificar visualmente si la comparación tiene sentido
+
+**5. Estados de UI implementados** ✅
+- `showRoiInspection`: Controla visibilidad del ROI global
+- `showSubRoiInspection`: Controla visibilidad de la subROI
+- `showTopMatchComparison`: Controla visibilidad de la comparación
+- Estados persistentes durante la sesión de vigilancia
+
+**6. Métodos del ViewModel** ✅
+- `toggleRoiInspection()`, `toggleSubRoiInspection()`, `toggleTopMatchComparison()`
+- `getGlobalRoiCrop()`, `getSubRoiCrop()`, `getClassificationCrop()`, `getTopMatchImage()`
+- Todos integrados con FrameProcessor para obtener crops en tiempo real
+
+### Cómo verificar manualmente en dispositivo
+
+1. **Preparar dataset**:
+   - Entrar en modo entrenamiento
+   - Capturar 5-10+ muestras de cada clase (OK, OBSTACULO, FALLO)
+   - Volver al modo normal
+
+2. **Iniciar vigilancia**:
+   - Definir ROI sobre el transfer
+   - Pulsar "Iniciar vigilancia"
+   - Verificar que aparece sección "🔍 Inspección Visual"
+
+3. **Verificar ROI global**:
+   - Pulsar botón "ROI Global" (se marca con ✓)
+   - Verificar que aparece imagen del ROI completo
+   - Confirmar que muestra la región correcta de la vía
+
+4. **Verificar subROI**:
+   - Pulsar botón "SubROI"
+   - Verificar que aparece imagen más pequeña (solo el transfer)
+   - Confirmar que excluye fondo blanco y líneas negras de la vía
+   - Verificar texto con método usado (COLOR_MASK o CENTERED_HEURISTIC)
+
+5. **Verificar top match**:
+   - Pulsar botón "Top Match"
+   - Verificar que aparecen dos imágenes lado a lado
+   - Izquierda: crop actual; Derecha: muestra del dataset más similar
+   - Verificar que la etiqueta y similitud tienen sentido
+
+6. **Verificar en diferentes condiciones**:
+   - Probar con transfer en estado OK, OBSTACULO, FALLO
+   - Confirmar que las imágenes de inspección cambian correctamente
+   - Verificar que el top match cambia según el estado visual
+
+### Estructura de la inspección visual
+
+```
+┌─────────────────────────────────────┐
+│ 🔍 Inspección Visual                │
+├─────────────────────────────────────┤
+│ [✓ ROI Global] [✓ SubROI] [Top Match] │
+├─────────────────────────────────────┤
+│ 1. ROI Global                       │
+│    [imagen completa del ROI]        │
+│                                     │
+│ 2. SubROI Efectiva + Crop Clasificado│
+│    COLOR_MASK | Transfer detectado  │
+│    [imagen del transfer solo]       │
+│                                     │
+│ 3. Comparación Top-1                │
+│    Top match: OK | Similitud: 87%   │
+│    [Actual]        [Top-1 Dataset]  │
+│                                     │
+│ SubROI: COLOR_MASK (conf: 85%)      │
+└─────────────────────────────────────┘
+```
+
 ## Siguiente paso técnico recomendado
 
-**Fase CERRADA** - La clasificación refinada con subROI está completa.
+**Fase CERRADA** - La observabilidad visual está completa y verificable en dispositivo.
 
 Posibles mejoras futuras (no prioritarias):
-- **UI de inspección visual**: Botones para ver ROI, subROI, crop actual, comparación top-1
 - Persistir features precalculadas en disco para arranque más rápido
 - Ajuste dinámico de pesos de features basado en precisión observada
 - Umbral mínimo de confianza configurable para predicción válida

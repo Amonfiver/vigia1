@@ -1603,4 +1603,146 @@ Implementar UI de inspección visual para aprovechar los nuevos estados:
 
 ---
 
-## Entrada 023 - [Siguiente fase pendiente]
+## Entrada 023 - Observabilidad visual completa en UI
+
+### Fecha
+2026-03-27
+
+### Objetivo
+Implementar en la UI una sección de inspección visual que muestre claramente: ROI global, subROI efectiva, crop actual clasificado y top-1 del dataset para permitir validación en dispositivo.
+
+### Contexto
+La iteración anterior (022) implementó la detección de subROI del transfer y la clasificación sobre esa subROI, pero dejó pendiente la observabilidad visual. Los estados internos existían (`transferSubRoiResult`, `topMatchInfo`) pero no estaban mostrados de forma usable en la UI.
+
+### Qué se implementó
+
+#### 1. Métodos de inspección visual en MainViewModel
+- `toggleRoiInspection()`, `toggleSubRoiInspection()`, `toggleTopMatchComparison()`
+- `getGlobalRoiCrop()`: Obtiene crop del ROI completo definido por el usuario
+- `getSubRoiCrop()`: Obtiene crop de la subROI detectada por color
+- `getClassificationCrop()`: Alias de getSubRoiCrop (misma imagen usada para clasificar)
+- `getTopMatchImage()`: Carga y decodifica la imagen del top match del dataset
+
+#### 2. Observadores de flujos reactivos
+- `monitoringManager.transferSubRoiResult` → `_uiState.transferSubRoiResult`
+- `monitoringManager.topMatchInfo` → `_uiState.topMatchInfo`
+- Asegura que los datos lleguen a la UI en tiempo real
+
+#### 3. Composables de inspección visual (MainActivity.kt)
+- **`VisualInspectionSection`**: Tarjeta principal con controles y área de visualización
+- **`InspectionToggleButton`**: Botones toggle para activar/desactivar vistas
+- **`VisualInspectionImages`**: Contenedor de las imágenes de inspección
+- **`InspectionImageItem`**: Componente reutilizable para mostrar un crop con etiqueta
+- **`TopMatchComparison`**: Vista lado a lado de imagen actual vs top match del dataset
+
+#### 4. Estados de UI en MainUiState
+- `showRoiInspection: Boolean` - Controla visibilidad del ROI global
+- `showSubRoiInspection: Boolean` - Controla visibilidad de la subROI
+- `showTopMatchComparison: Boolean` - Controla visibilidad de la comparación
+
+### Características de la UI implementada
+
+**Sección "🔍 Inspección Visual"** (visible solo durante vigilancia):
+- Título con icono de lupa
+- Tres botones toggle: ROI Global, SubROI, Top Match
+- Área de imágenes que aparece al activar cualquier botón
+- Información del método de detección de subROI al pie
+
+**Visualización de ROI global**:
+- Imagen completa del ROI definido por el usuario
+- Etiqueta: "1. ROI Global (definido por usuario)"
+- Altura: 120dp para buena visibilidad
+
+**Visualización de subROI**:
+- Imagen del transfer detectado (excluye fondo)
+- Etiqueta: "2. SubROI Efectiva + Crop Clasificado"
+- Sub-etiqueta con método usado (COLOR_MASK/CENTERED_HEURISTIC) y descripción
+- Altura: 100dp (más pequeña porque es solo el transfer)
+
+**Comparación top-1**:
+- Layout lado a lado (Row con dos Column)
+- Izquierda: "Actual" - crop actual clasificado
+- Derecha: "Top-1 Dataset" - muestra más similar del dataset
+- Info del top match: clase (con color) y similitud (%)
+- Altura: 80dp por imagen para que quepan ambas
+
+### Archivos modificados
+- `ui/MainViewModel.kt` - Añadidos métodos de inspección y observadores
+- `MainActivity.kt` - Añadidos composables de inspección visual completos
+
+### Tracking de subtareas
+
+- [x] Añadir métodos toggle para mostrar/ocultar vistas de inspección
+- [x] Implementar getGlobalRoiCrop() para obtener ROI completo
+- [x] Implementar getSubRoiCrop() para obtener subROI detectada
+- [x] Implementar getTopMatchImage() para cargar imagen del dataset
+- [x] Añadir observadores de transferSubRoiResult y topMatchInfo
+- [x] Crear VisualInspectionSection composable
+- [x] Crear botones toggle para ROI, SubROI, Top Match
+- [x] Crear InspectionImageItem para mostrar crops
+- [x] Crear TopMatchComparison para comparación lado a lado
+- [x] Integrar sección en NormalModeContent (visible durante vigilancia)
+- [x] Actualizar documentación viva (project-status.md, dev-log.md)
+- [x] Verificar compilación exitosa
+
+### Estado de build
+✅ COMPILA CORRECTAMENTE (6 warnings menores preexistentes)
+
+### Cómo verificar manualmente en dispositivo
+
+1. **Preparar dataset**:
+   - Entrar en "🎓 Modo Entrenamiento"
+   - Capturar 5-10+ muestras de cada clase (OK, OBSTACULO, FALLO)
+   - Volver al modo normal
+
+2. **Iniciar vigilancia**:
+   - Definir ROI sobre toda la vía del transfer
+   - Pulsar "Iniciar vigilancia"
+   - Verificar que aparece sección "🔍 Inspección Visual"
+
+3. **Verificar ROI global**:
+   - Pulsar botón "ROI Global" → debe marcarse con ✓
+   - Verificar imagen del ROI completo (debe mostrar toda la vía)
+   - Confirmar que la región es correcta
+
+4. **Verificar subROI**:
+   - Pulsar botón "SubROI" → debe marcarse con ✓
+   - Verificar imagen más pequeña (solo el cuerpo del transfer)
+   - Confirmar que excluye fondo blanco y líneas negras
+   - Verificar texto con método (COLOR_MASK o CENTERED_HEURISTIC)
+
+5. **Verificar top match**:
+   - Pulsar botón "Top Match" → debe marcarse con ✓
+   - Verificar dos imágenes lado a lado
+   - Izquierda: crop actual; Derecha: muestra del dataset
+   - Verificar etiqueta de clase y similitud (%)
+
+6. **Validación completa**:
+   - Cambiar estado del transfer (OK → OBSTACULO → FALLO)
+   - Verificar que las imágenes de inspección cambian
+   - Verificar que el top match cambia según el estado
+   - Confirmar que la clasificación tiene sentido visual
+
+### Confirmación de cierre de fase
+✅ **La fase de observabilidad visual está COMPLETAMENTE CERRADA**
+
+El usuario puede ver con sus ojos:
+- ✅ ROI global (crop completo del área definida)
+- ✅ SubROI efectiva (solo el transfer, sin fondo)
+- ✅ Crop actual clasificado (misma imagen usada para extraer features)
+- ✅ Top-1 del dataset (muestra más similar con etiqueta y similitud)
+
+Todo es usable en pantalla de móvil (tamaños de imagen adaptados, scroll disponible, botones grandes).
+
+### Siguiente paso
+**Fase cerrada completamente** - No hay siguiente paso obligatorio.
+
+Posibles mejoras futuras no prioritarias:
+- Persistir features en disco
+- Ajuste dinámico de pesos
+- Umbral de confianza configurable
+- Historial de clasificaciones
+
+---
+
+## Entrada 024 - [Siguiente fase pendiente]

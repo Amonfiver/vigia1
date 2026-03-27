@@ -232,7 +232,7 @@ MonitoringManager.detectionResult → MainViewModel
 
 ### MainActivity (MainActivity.kt)
 - **Modos de pantalla**:
-  - `NORMAL`: Vigilancia, Telegram, ROI
+  - `NORMAL`: Vigilancia, Telegram, ROI, inspección visual
   - `ROI_SELECTION`: Selector de ROI
   - `TRAINING`: Entrenamiento supervisado
 - **UI de entrenamiento**:
@@ -244,6 +244,12 @@ MonitoringManager.detectionResult → MainViewModel
   - `ClassificationSection`: clase estimada, confianza, scores por clase
   - Estado de sincronización del dataset
   - Botón de resincronización
+- **UI de inspección visual (NUEVO)**:
+  - `VisualInspectionSection`: tarjeta principal de inspección
+  - `InspectionToggleButton`: botones toggle para activar/desactivar vistas
+  - `VisualInspectionImages`: contenedor de imágenes de inspección
+  - `InspectionImageItem`: componente para mostrar un crop con etiqueta
+  - `TopMatchComparison`: comparación lado a lado (actual vs top-1 dataset)
 
 ---
 

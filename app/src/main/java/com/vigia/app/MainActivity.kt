@@ -36,10 +36,12 @@ package com.vigia.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +51,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -230,6 +233,15 @@ fun NormalModeContent(
                 datasetStats = uiState.datasetStats,
                 cacheStats = uiState.cacheStats,
                 onResync = { viewModel.forceResyncDataset() },
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
+
+        // Sección de inspección visual (visible durante vigilancia)
+        if (uiState.isMonitoring && uiState.currentRoi != null) {
+            VisualInspectionSection(
+                uiState = uiState,
+                viewModel = viewModel,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
         }
@@ -1601,6 +1613,351 @@ fun ConfirmationSection(
                     }
                 }
                 else -> {}
+            }
+        }
+    }
+}
+
+/**
+ * Sección de inspección visual completa.
+ * Muestra ROI global, subROI efectiva, crop clasificado y comparación con top-1.
+ */
+@Composable
+fun VisualInspectionSection(
+    uiState: MainUiState,
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Título
+            Text(
+                text = "🔍 Inspección Visual",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Botones de control
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                InspectionToggleButton(
+                    text = "ROI Global",
+                    isActive = uiState.showRoiInspection,
+                    onClick = { viewModel.toggleRoiInspection() }
+                )
+                InspectionToggleButton(
+                    text = "SubROI",
+                    isActive = uiState.showSubRoiInspection,
+                    onClick = { viewModel.toggleSubRoiInspection() }
+                )
+                InspectionToggleButton(
+                    text = "Top Match",
+                    isActive = uiState.showTopMatchComparison,
+                    onClick = { viewModel.toggleTopMatchComparison() }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Área de visualización de imágenes
+            if (uiState.showRoiInspection || uiState.showSubRoiInspection || uiState.showTopMatchComparison) {
+                VisualInspectionImages(
+                    uiState = uiState,
+                    viewModel = viewModel
+                )
+            }
+
+            // Información de la subROI detectada
+            uiState.transferSubRoiResult?.let { subRoiResult ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "SubROI: ${subRoiResult.method.name} (conf: ${(subRoiResult.confidence * 100).toInt()}%)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Botón toggle para activar/desactivar vistas de inspección.
+ */
+@Composable
+fun InspectionToggleButton(
+    text: String,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isActive) MaterialTheme.colorScheme.primary 
+                          else MaterialTheme.colorScheme.surface,
+            contentColor = if (isActive) MaterialTheme.colorScheme.onPrimary 
+                          else MaterialTheme.colorScheme.onSurface
+        ),
+        border = if (!isActive) androidx.compose.foundation.BorderStroke(
+            1.dp, 
+            MaterialTheme.colorScheme.outline
+        ) else null
+    ) {
+        Text(
+            text = if (isActive) "✓ $text" else text,
+            fontSize = 12.sp
+        )
+    }
+}
+
+/**
+ * Área de imágenes de inspección visual.
+ */
+@Composable
+fun VisualInspectionImages(
+    uiState: MainUiState,
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // ROI Global
+        if (uiState.showRoiInspection) {
+            InspectionImageItem(
+                label = "1. ROI Global (definido por usuario)",
+                bitmap = viewModel.getGlobalRoiCrop(),
+                height = 120.dp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // SubROI y Crop clasificado (son la misma imagen)
+        if (uiState.showSubRoiInspection) {
+            InspectionImageItem(
+                label = "2. SubROI Efectiva + Crop Clasificado",
+                bitmap = viewModel.getSubRoiCrop(),
+                height = 100.dp,
+                subLabel = uiState.transferSubRoiResult?.let {
+                    "${it.method.name} | ${it.subRegion.description}"
+                }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Top Match comparación
+        if (uiState.showTopMatchComparison) {
+            TopMatchComparison(
+                topMatchInfo = uiState.topMatchInfo,
+                currentCrop = viewModel.getClassificationCrop(),
+                viewModel = viewModel
+            )
+        }
+    }
+}
+
+/**
+ * Item individual de imagen de inspección.
+ */
+@Composable
+fun InspectionImageItem(
+    label: String,
+    bitmap: Bitmap?,
+    height: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+    subLabel: String? = null
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary
+        )
+        
+        subLabel?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(height)
+                .background(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = MaterialTheme.shapes.small
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = label,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Cargando...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Comparación visual entre crop actual y top match del dataset.
+ */
+@Composable
+fun TopMatchComparison(
+    topMatchInfo: com.vigia.app.classification.TopMatchInfo?,
+    currentCrop: Bitmap?,
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier
+) {
+    val topMatchImage = remember(topMatchInfo?.sampleId) {
+        viewModel.getTopMatchImage()
+    }
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "3. Comparación Top-1 del Dataset",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+
+        // Info del top match
+        topMatchInfo?.let { info ->
+            val similarityPercent = (info.similarity * 100).toInt()
+            val labelColor = when (info.label) {
+                ClassLabel.OK -> Color(0xFF4CAF50)
+                ClassLabel.OBSTACULO -> Color(0xFFFF9800)
+                ClassLabel.FALLO -> Color(0xFFF44336)
+            }
+            
+            Text(
+                text = "Top match: ${info.label.name} | Similitud: $similarityPercent%",
+                style = MaterialTheme.typography.bodySmall,
+                color = labelColor,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Imágenes lado a lado
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            // Crop actual
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = "Actual",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                Box(
+                    modifier = Modifier
+                        .height(80.dp)
+                        .fillMaxWidth()
+                        .padding(4.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = MaterialTheme.shapes.small
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (currentCrop != null) {
+                        Image(
+                            bitmap = currentCrop.asImageBitmap(),
+                            contentDescription = "Crop actual",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                }
+            }
+
+            // Top match
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = "Top-1 Dataset",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                Box(
+                    modifier = Modifier
+                        .height(80.dp)
+                        .fillMaxWidth()
+                        .padding(4.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = MaterialTheme.shapes.small
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (topMatchImage != null) {
+                        Image(
+                            bitmap = topMatchImage.asImageBitmap(),
+                            contentDescription = "Top match",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text(
+                            text = "Sin datos",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
             }
         }
     }

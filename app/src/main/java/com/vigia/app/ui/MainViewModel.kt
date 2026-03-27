@@ -270,6 +270,24 @@ class MainViewModel(
                 }
             }
         }
+
+        // Observar resultado de detección de subROI del transfer
+        viewModelScope.launch {
+            monitoringManager.transferSubRoiResult.collect { result ->
+                _uiState.update { currentState ->
+                    currentState.copy(transferSubRoiResult = result)
+                }
+            }
+        }
+
+        // Observar información del top match
+        viewModelScope.launch {
+            monitoringManager.topMatchInfo.collect { info ->
+                _uiState.update { currentState ->
+                    currentState.copy(topMatchInfo = info)
+                }
+            }
+        }
     }
 
     private fun loadSavedData() {
@@ -742,6 +760,92 @@ class MainViewModel(
 
     fun clearOkBaselineCaptureState() {
         _uiState.update { it.copy(okBaselineCaptureState = OkBaselineCaptureState.Idle) }
+    }
+
+    // ==================== INSPECCIÓN VISUAL ====================
+
+    /**
+     * Activa/desactiva la visualización de la inspección de ROI.
+     */
+    fun toggleRoiInspection() {
+        _uiState.update { currentState ->
+            currentState.copy(showRoiInspection = !currentState.showRoiInspection)
+        }
+    }
+
+    /**
+     * Activa/desactiva la visualización de la inspección de subROI.
+     */
+    fun toggleSubRoiInspection() {
+        _uiState.update { currentState ->
+            currentState.copy(showSubRoiInspection = !currentState.showSubRoiInspection)
+        }
+    }
+
+    /**
+     * Activa/desactiva la visualización de la comparación con top match.
+     */
+    fun toggleTopMatchComparison() {
+        _uiState.update { currentState ->
+            currentState.copy(showTopMatchComparison = !currentState.showTopMatchComparison)
+        }
+    }
+
+    /**
+     * Obtiene el crop del ROI global actual.
+     */
+    fun getGlobalRoiCrop(): Bitmap? {
+        val processor = frameProcessor ?: return null
+        val roi = _uiState.value.currentRoi ?: return null
+        return processor.getRoiCrop(roi)
+    }
+
+    /**
+     * Obtiene el crop de la subROI efectiva detectada.
+     */
+    fun getSubRoiCrop(): Bitmap? {
+        val processor = frameProcessor ?: return null
+        val roi = _uiState.value.currentRoi ?: return null
+        val subRoiResult = _uiState.value.transferSubRoiResult ?: return null
+        
+        // Convertir subROI a coordenadas absolutas
+        val absoluteSubRegion = subRoiResult.toAbsoluteCoordinates(roi)
+        return processor.getRegionCrop(
+            absoluteSubRegion.left,
+            absoluteSubRegion.top,
+            absoluteSubRegion.right,
+            absoluteSubRegion.bottom
+        )
+    }
+
+    /**
+     * Obtiene el crop que se está usando actualmente para clasificación.
+     * Es el mismo que la subROI efectiva.
+     */
+    fun getClassificationCrop(): Bitmap? {
+        return getSubRoiCrop()
+    }
+
+    /**
+     * Obtiene la imagen del top match del dataset.
+     */
+    fun getTopMatchImage(): Bitmap? {
+        val topMatchInfo = _uiState.value.topMatchInfo ?: return null
+        val sampleId = topMatchInfo.sampleId
+        
+        // Buscar la muestra en el dataset
+        val sample = _uiState.value.trainingDatasetState.getAllSamples()
+            .find { it.id == sampleId }
+        
+        return sample?.let {
+            try {
+                android.graphics.BitmapFactory.decodeByteArray(
+                    it.imageData, 0, it.imageData.size
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }
     }
 
     // ==================== CLASIFICACIÓN AUTOMÁTICA ====================
