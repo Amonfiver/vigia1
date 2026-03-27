@@ -70,6 +70,7 @@ data class TransferSubRoiResult(
  * Métodos de detección disponibles.
  */
 enum class DetectionMethod {
+    MANUAL,             // SubROI definida manualmente por el usuario (preferida)
     COLOR_MASK,         // Detección basada en máscara de color
     CENTERED_HEURISTIC, // Heurística centrada (fallback)
     FULL_ROI            // Usar ROI completo (último fallback)

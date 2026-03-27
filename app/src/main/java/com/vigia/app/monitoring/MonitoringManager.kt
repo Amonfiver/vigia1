@@ -394,23 +394,51 @@ class MonitoringManager(
 
     /**
      * Realiza clasificación automática del frame actual contra el dataset cacheado.
-     * Usa la subROI del transfer para extraer features, no el ROI completo.
+     * Usa la SubROI manual del transfer si existe, o la detecta automáticamente.
      * 
      * Proceso:
-     * 1. Detectar subROI del transfer dentro del ROI global
-     * 2. Extraer sub-frame correspondiente a la subROI
-     * 3. Extraer features de la subROI (no del ROI completo)
+     * 1. Obtener SubROI: manual (si existe) o detectar automáticamente
+     * 2. Extraer sub-frame correspondiente a la SubROI
+     * 3. Extraer features de la SubROI (no del ROI completo)
      * 4. Comparar contra dataset cacheado
      * 5. Actualizar información de top match para observabilidad
      */
     private fun performClassification(frameData: ColorFrameData) {
         val roi = currentRoi ?: return
         
-        // Paso 1: Detectar subROI del transfer
-        val subRoiResult = subRoiDetector.detectTransferSubRoi(frameData, roi)
+        // Paso 1: Obtener SubROI - manual preferida sobre automática
+        val subRoiResult = if (roi.hasSubRoi()) {
+            // Usar SubROI manual definida por el usuario
+            val absoluteSubRoi = roi.getAbsoluteSubRoi()!!
+            TransferSubRoiResult(
+                subRegion = SubRegion(
+                    left = absoluteSubRoi.left,
+                    top = absoluteSubRoi.top,
+                    right = absoluteSubRoi.right,
+                    bottom = absoluteSubRoi.bottom,
+                    description = "SubROI Manual (definida por usuario)"
+                ),
+                confidence = 1.0f,
+                method = DetectionMethod.MANUAL,
+                stats = SubRoiDetectionStats(
+                    totalPixelsAnalyzed = frameData.width * frameData.height,
+                    candidatePixelsFound = ((absoluteSubRoi.right - absoluteSubRoi.left) * 
+                                           (absoluteSubRoi.bottom - absoluteSubRoi.top) * 
+                                           frameData.width * frameData.height).toInt(),
+                    candidatePercentage = 100f,
+                    boundingBoxCoverage = (absoluteSubRoi.right - absoluteSubRoi.left) * 
+                                          (absoluteSubRoi.bottom - absoluteSubRoi.top),
+                    avgColorfulness = 128f,
+                    detectionTimeMs = 0L
+                )
+            )
+        } else {
+            // Fallback: detectar automáticamente
+            subRoiDetector.detectTransferSubRoi(frameData, roi)
+        }
         _transferSubRoiResult.value = subRoiResult
         
-        // Paso 2: Extraer sub-frame de la subROI detectada
+        // Paso 2: Extraer sub-frame de la SubROI
         val absoluteSubRegion = subRoiResult.toAbsoluteCoordinates(roi)
         val subFrameData = try {
             frameData.extractRegion(
@@ -424,7 +452,7 @@ class MonitoringManager(
             frameData
         }
         
-        // Paso 3: Clasificar usando SOLO la subROI
+        // Paso 3: Clasificar usando SOLO la SubROI
         val result = datasetClassifier.classify(subFrameData)
         _classificationResult.value = result
         
@@ -506,8 +534,8 @@ class MonitoringManager(
     }
     
     companion object {
-        const val ANALYSIS_INTERVAL_MS = 500L
-        const val DEFAULT_CONSECUTIVE_DETECTIONS = 3
-        const val DEFAULT_STABILIZATION_TIMEOUT_MS = 2000L
+        const val ANALYSIS_INTERVAL_MS = 10000L  // 10 segundos entre comparaciones
+        const val DEFAULT_CONSECUTIVE_DETECTIONS = 2  // Reducido para mantener respuesta con intervalo más largo
+        const val DEFAULT_STABILIZATION_TIMEOUT_MS = 15000L  // Timeout extendido para intervalo de 10s
     }
 }

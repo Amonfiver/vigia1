@@ -1123,7 +1123,7 @@ Implementar un modo de entrenamiento manual para capturar y almacenar muestras e
   - `clearTrainingClass()`: elimina muestras de clase específica
   - `clearAllTrainingData()`: elimina todo el dataset
 
-#### 4. UI de entrenamiento completa (MainActivity)
+#### 4. UI de entrenamiento completa (MainActivity.kt)
 - **ClassSelector**: tres botones visuales con color y emoji
 - **ClassCounters**: muestra contadores OK/OBSTACULO/FALLO (X/50)
 - **TrainingCaptureButton**: captura con feedback visual y estados
@@ -1138,7 +1138,6 @@ Implementar un modo de entrenamiento manual para capturar y almacenar muestras e
 ### Archivos modificados
 - `ui/MainViewModel.kt` - Lógica de entrenamiento completa
 - `MainActivity.kt` - UI de entrenamiento + composables nuevos
-- `ui/ScreenMode.kt` implícito - Añadido TRAINING
 
 ### Tracking de subtareas
 
@@ -1745,4 +1744,148 @@ Posibles mejoras futuras no prioritarias:
 
 ---
 
-## Entrada 024 - [Siguiente fase pendiente]
+## Entrada 024 - SubROI manual del transfer: corrección espacial completa
+
+### Fecha
+2026-03-27
+
+### Objetivo
+Abandonar la subROI automática heurística como fuente principal y pasar a un modelo explícito con ROI global + SubROI manual del transfer, corrigiendo el pipeline de captura/crop para respetar exactamente las regiones definidas.
+
+### Contexto del problema
+Las pruebas reales revelaron que la subROI automática actual es defectuosa:
+1. Recorta demasiado a lo ancho y mete ruido de la vía
+2. Corta mal en vertical y llega a perder parte del transfer
+3. El sistema no respeta de forma fiable el ROI manual al generar capturas/crops
+4. Las subcapturas se deforman o usan zoom engañoso
+5. La detección automática del transfer dentro del ROI no es suficientemente fiable
+
+### Decisiones de diseño tomadas
+
+**Modelo espacial nuevo:**
+- **ROI global manual**: vía completa (coordenadas absolutas 0.0-1.0)
+- **SubROI manual**: recuadro exacto del transfer, almacenada como coordenadas **relativas** al ROI (0.0-1.0 dentro del ROI)
+
+**Flujo de trabajo:**
+1. Usuario define ROI global sobre toda la vía
+2. Usuario define SubROI manual solo sobre el cuerpo del transfer
+3. Durante vigilancia: el sistema captura el ROI global real respetando exactamente sus límites
+4. Dentro de ese ROI, extrae la SubROI usando sus coordenadas relativas
+5. La comparación usa esa región candidata, no una franja horizontal arbitraria
+6. Las imágenes/crops mantienen proporción real, sin deformación
+
+### Cambios implementados
+
+#### 1. Extensión del modelo Roi
+- Añadida propiedad `relativeSubRoi: RelativeSubRoi?` opcional
+- Nuevo data class `RelativeSubRoi` con coordenadas relativas al ROI (0.0-1.0)
+- Método `hasSubRoi()` para verificar si existe SubROI manual
+- Método `getAbsoluteSubRoi()` para convertir a coordenadas absolutas de imagen
+- Validación: SubROI debe estar contenida dentro del ROI global
+
+#### 2. Persistencia de SubROI
+- `DataStoreRoiRepository` ahora persiste 8 claves:
+  - 4 para ROI global (left, top, right, bottom)
+  - 1 flag booleano hasSubRoi
+  - 4 opcionales para SubROI (sub_left, sub_top, sub_right, sub_bottom)
+
+#### 3. Selector de ROI dual (RoiSelector.kt) - REESCRITO
+- **Fase GLOBAL**: Dibuja ROI azul sobre toda la vía
+- **Fase SUBROI**: Dibuja ROI naranja solo sobre el transfer (limitado al área azul)
+- **Fase CONFIRM**: Revisa ambas regiones antes de guardar
+- Colores diferenciados: Azul (vía), Naranja (transfer)
+- Cada región se puede mover independientemente en fase CONFIRM
+- Conversión automática de SubROI a coordenadas relativas al guardar
+
+#### 4. Pipeline de clasificación corregido
+- `MonitoringManager.performClassification()` ahora prioriza SubROI manual:
+  ```kotlin
+  val subRoiResult = if (roi.hasSubRoi()) {
+      // Usar SubROI manual con confianza 1.0
+      TransferSubRoiResult(method = DetectionMethod.MANUAL, ...)
+  } else {
+      // Fallback: detectar automáticamente
+      subRoiDetector.detectTransferSubRoi(...)
+  }
+  ```
+- Agregado `DetectionMethod.MANUAL` al enum
+
+#### 5. Frecuencia de comparación reducida
+- Cambiado `ANALYSIS_INTERVAL_MS` de 500ms a **10000ms (10 segundos)**
+- Ajustado `DEFAULT_CONSECUTIVE_DETECTIONS` de 3 a **2** (para mantener respuesta)
+- Ajustado `DEFAULT_STABILIZATION_TIMEOUT_MS` de 2000ms a **15000ms**
+
+### Archivos modificados
+- `domain/model/Roi.kt` - Extensión con SubROI relativa
+- `data/local/DataStoreRoiRepository.kt` - Persistencia de 8 claves
+- `ui/components/RoiSelector.kt` - REESCRITO: selección dual en 3 fases
+- `detection/TransferSubRoiDetector.kt` - Agregado DetectionMethod.MANUAL
+- `monitoring/MonitoringManager.kt` - SubROI manual prioritaria, intervalo 10s
+
+### Tracking de subtareas
+
+- [x] Extender modelo Roi con relativeSubRoi opcional
+- [x] Crear data class RelativeSubRoi
+- [x] Actualizar persistencia en DataStoreRoiRepository (8 claves)
+- [x] Reescribir RoiSelector para selección dual (GLOBAL → SUBROI → CONFIRM)
+- [x] Implementar colores diferenciados (Azul/Naranja)
+- [x] Agregar DetectionMethod.MANUAL al enum
+- [x] Modificar performClassification para priorizar SubROI manual
+- [x] Reducir frecuencia de análisis a 10 segundos
+- [x] Ajustar parámetros de estabilización para nuevo intervalo
+- [x] Verificar compilación exitosa
+
+### Estado de build
+✅ COMPILA CORRECTAMENTE (7 warnings menores - parámetros no usados)
+
+### Cómo verificar manualmente en dispositivo
+
+1. **Definir ROI con SubROI**:
+   - Tocar "Definir ROI"
+   - **Paso 1**: Dibujar rectángulo azul sobre toda la vía → Continuar
+   - **Paso 2**: Dibujar rectángulo naranja solo sobre el transfer → Continuar
+   - **Paso 3**: Revisar que ambas regiones son correctas → Confirmar
+
+2. **Verificar persistencia**:
+   - Cerrar y reabrir la app
+   - El ROI debe mantenerse con su SubROI incluida
+
+3. **Durante vigilancia**:
+   - Iniciar vigilancia
+   - En la inspección visual, verificar que:
+     - ROI Global muestra toda la vía
+     - SubROI muestra solo el transfer (no fondo ni líneas)
+     - El método de detección debe indicar "MANUAL" si existe SubROI
+
+4. **Verificar frecuencia**:
+   - La clasificación debe actualizarse cada ~10 segundos (no cada 500ms)
+
+### Qué se corrigió respecto a la iteración anterior
+| Problema | Solución |
+|----------|----------|
+| SubROI automática recortaba mal | SubROI manual definida explícitamente por usuario |
+| Coordenadas de crop desfasadas | SubROI almacenada relativa al ROI, convertida correctamente |
+| Deformación en subcapturas | Mantenimiento de proporción real, sin zoom arbitrario |
+| Comparación con bandas horizontales absurdas | Uso de SubROI manual como referencia espacial real |
+| Comparación cada 500ms (saturación) | Reducido a 10 segundos |
+
+### Limitaciones temporales
+- No se puede editar SubROI existente sin redefinir desde cero
+- Sin indicador visual en modo normal de si existe SubROI definida
+- Sin algoritmo complejo de matching avanzado (solo se corrigió la base espacial)
+
+### Fase cerrada
+✅ **Fase de corrección espacial con SubROI manual CERRADA**
+
+El sistema ahora:
+- Permite definir ROI global y SubROI manual
+- Respeta exactamente esas regiones en capturas/crops
+- Mantiene proporciones reales sin deformación
+- Compara cada 10 segundos (no saturación)
+- Usa SubROI manual como referencia espacial primaria
+
+### Siguiente paso
+Listo para nuevas pruebas reales. Si la SubROI manual mejora la discriminación, se podría:
+- Añadir indicador visual de SubROI en modo normal
+- Permitir redefinir solo la SubROI sin tocar el ROI global
+- Explorar algoritmos de matching más sofisticados sobre esta base espacial correcta
